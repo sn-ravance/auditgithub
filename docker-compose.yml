@@ -1,0 +1,109 @@
+services:
+  auditgh:
+    build:
+      context: .
+      args:
+        - GITHUB_TOKEN=${GITHUB_TOKEN}
+    container_name: auditgh
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_ORG=${GITHUB_ORG}
+      - GITHUB_API=${GITHUB_API:-https://api.github.com}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=auditgh
+      - POSTGRES_PASSWORD=auditgh_secret
+      - POSTGRES_DB=auditgh_kb
+      - SKIP_SCAN=${SKIP_SCAN:-false}
+    volumes:
+      - .:/app
+      - ./vulnerability_reports:/app/vulnerability_reports
+      # Cache directories for various tools to speed up subsequent runs
+      - dependency-cache:/root/.cache/dependency-check
+      - semgrep-cache:/root/.cache/semgrep
+      - npm-cache:/root/.npm
+      - bundle-cache:/usr/local/bundle
+    # Uncomment the following lines to limit resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 4G
+    # Command to run with default arguments
+    command: >
+      --org ${GITHUB_ORG} --api-base ${GITHUB_API:-https://api.github.com} --report-dir /app/vulnerability_reports --max-workers 4 --loglevel INFO
+    depends_on:
+      - db
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: auditgh_api
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=auditgh
+      - POSTGRES_PASSWORD=auditgh_secret
+      - POSTGRES_DB=auditgh_kb
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_ORG=${GITHUB_ORG}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL}
+      - AI_PROVIDER=${AI_PROVIDER}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - DOCKER_BASE_URL=${DOCKER_BASE_URL}
+      - AZURE_AI_FOUNDRY_ENDPOINT=${AZURE_AI_FOUNDRY_ENDPOINT}
+      - AZURE_AI_FOUNDRY_API_KEY=${AZURE_AI_FOUNDRY_API_KEY}
+    depends_on:
+      - db
+    volumes:
+      - .:/app
+      - ./vulnerability_reports:/app/vulnerability_reports
+
+  web-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+      target: deps
+    container_name: auditgh_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - API_BASE=http://api:8000
+      - NODE_ENV=development
+    volumes:
+      - ./src/web-ui:/app
+      - web-ui-node-modules:/app/node_modules
+      - web-ui-next:/app/.next
+    working_dir: /app
+    command: sh -c "npm install && npx next dev"
+    depends_on:
+      - api
+
+  db:
+    image: postgres:15-alpine
+    container_name: auditgh_db
+    environment:
+      - POSTGRES_USER=auditgh
+      - POSTGRES_PASSWORD=auditgh_secret
+      - POSTGRES_DB=auditgh_kb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  dependency-cache:
+  semgrep-cache:
+  npm-cache:
+  bundle-cache:
+  postgres-data:
+  web-ui-node-modules:
+  web-ui-next:
