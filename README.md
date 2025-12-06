@@ -241,4 +241,4 @@ This project follows a 3-Layer Architecture:
 
 ## License
 
-MIT
+GNU GLP 3.0
