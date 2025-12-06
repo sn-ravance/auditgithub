@@ -549,9 +549,9 @@ def ingest_single_repo(repo_name: str, repo_dir: str):
         
         # 1. Get or Create Repository
         repo = db.query(models.Repository).filter(models.Repository.name == repo_name).first()
+        github_org = os.getenv("GITHUB_ORG", "sealmindset")
+        repo_url = f"https://github.com/{github_org}/{repo_name}"
         if not repo:
-            github_org = os.getenv("GITHUB_ORG", "sealmindset")
-            repo_url = f"https://github.com/{github_org}/{repo_name}"
             repo = models.Repository(
                 name=repo_name,
                 description=f"Imported from {repo_dir}",
@@ -561,8 +561,12 @@ def ingest_single_repo(repo_name: str, repo_dir: str):
             db.add(repo)
             db.commit()
             db.refresh(repo)
-            db.refresh(repo)
-        
+        elif not repo.url:
+            # Fix missing URL for existing repos
+            repo.url = repo_url
+            db.commit()
+            logger.info(f"Updated missing URL for {repo_name}: {repo_url}")
+
         # 2. Create ScanRun
         scan_run = models.ScanRun(
             repository_id=repo.id,
@@ -654,9 +658,9 @@ def ingest_reports(report_dir: str = "vulnerability_reports"):
             
             # 1. Get or Create Repository
             repo = db.query(models.Repository).filter(models.Repository.name == repo_name).first()
+            github_org = os.getenv("GITHUB_ORG", "sealmindset")
+            repo_url = f"https://github.com/{github_org}/{repo_name}"
             if not repo:
-                github_org = os.getenv("GITHUB_ORG", "sealmindset")
-                repo_url = f"https://github.com/{github_org}/{repo_name}"
                 repo = models.Repository(
                     name=repo_name,
                     description=f"Imported from {report_dir}",
@@ -666,7 +670,12 @@ def ingest_reports(report_dir: str = "vulnerability_reports"):
                 db.add(repo)
                 db.commit()
                 db.refresh(repo)
-            
+            elif not repo.url:
+                # Fix missing URL for existing repos
+                repo.url = repo_url
+                db.commit()
+                logger.info(f"Updated missing URL for {repo_name}: {repo_url}")
+
             # 2. Create ScanRun
             scan_run = models.ScanRun(
                 repository_id=repo.id,
