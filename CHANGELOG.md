@@ -20,6 +20,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- **AI Security Analysis Enhancements** - Major improvements to the Ask AI feature for findings
+  - **Update Description Button**: Save AI analysis directly to the finding's description in the database
+  - **Beautified Description Display**: ReactMarkdown rendering with gradient styling for AI-enhanced descriptions
+  - **Conversation Separation**: Initial AI analysis displayed in a distinct card, follow-up conversation in a separate chat area
+  - **Auto-Start Analysis**: AI analysis automatically begins when the dialog opens
+  - **NLP Revision Detection**: Automatically detects when follow-up questions request description revisions (e.g., "update the description", "add more detail")
+  - **Description Version History**: Full versioning system with restore capability
+    - View previous versions with timestamps via history popover
+    - One-click restore to any previous version
+    - Tracks all changes with `description_change` type in finding_history table
+  - **Pro Tips Popover**: Helpful tips for analysts via lightbulb icon
+
+- **Repository Navigation Links** - Added repository links throughout the UI
+  - Finding details page: Repository name links to project details page
+  - All Findings table: Repository column now links to project details page
+
+- **Last Commit Column** - Added "Last Commit" column to All Findings table
+  - Shows the repository's last commit date (from contributor commit history)
+  - Helps analysts prioritize findings in actively maintained vs. dormant repositories
+  - Efficient batch query fetches commit dates for all repositories in one database call
+
+### Changed
+
+- **Finding Response Model**: Added `repo_last_commit_at` field derived from max contributor `last_commit_at`
+- **AskAIDialog Component**: Complete rewrite with improved UX and state management
+- **Finding Details Page**: Moved Ask AI button to Details card, added ReactMarkdown for description rendering
+
+### Fixed
+
+- Fixed useEffect ordering issue where `handleAnalyze` was called before it was defined
+
+---
+
 - **Intelligent Progress Monitoring System** - Adaptive timeout system that monitors subprocess progress
   - Replaces fixed 30-minute timeout with 5-minute initial timeout
   - Monitors CPU usage, file I/O, and output in real-time
