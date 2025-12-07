@@ -62,7 +62,7 @@ export function AiTriageDialog({ finding }: AiTriageDialogProps) {
                     Ask AI
                 </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
+            <DialogContent className="!w-[75vw] !h-[75vh] !max-w-none flex flex-col">
                 <DialogHeader>
                     <DialogTitle>AI Security Analysis</DialogTitle>
                     <DialogDescription>
@@ -70,38 +70,40 @@ export function AiTriageDialog({ finding }: AiTriageDialogProps) {
                     </DialogDescription>
                 </DialogHeader>
 
-                {loading ? (
-                    <div className="flex flex-col items-center justify-center py-8">
-                        <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
-                        <p className="mt-2 text-sm text-muted-foreground">Analyzing with AI...</p>
-                    </div>
-                ) : analysis ? (
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium">Priority Score</span>
-                            <Badge variant={analysis.priority === "High" ? "destructive" : "default"}>
-                                {analysis.priority}
-                            </Badge>
+                <div className="flex-1 overflow-y-auto">
+                    {loading ? (
+                        <div className="flex flex-col items-center justify-center py-8">
+                            <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+                            <p className="mt-2 text-sm text-muted-foreground">Analyzing with AI...</p>
                         </div>
+                    ) : analysis ? (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium">Priority Score</span>
+                                <Badge variant={analysis.priority === "High" ? "destructive" : "default"}>
+                                    {analysis.priority}
+                                </Badge>
+                            </div>
 
-                        <div className="space-y-2">
-                            <h4 className="text-sm font-medium">Reasoning</h4>
-                            <p className="text-sm text-muted-foreground bg-muted p-3 rounded-md">
-                                {analysis.reasoning}
-                            </p>
-                        </div>
+                            <div className="space-y-2">
+                                <h4 className="text-sm font-medium">Reasoning</h4>
+                                <p className="text-sm text-muted-foreground bg-muted p-3 rounded-md">
+                                    {analysis.reasoning}
+                                </p>
+                            </div>
 
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <span>Confidence: {(analysis.confidence * 100).toFixed(0)}%</span>
-                            <span>•</span>
-                            <span>False Positive Risk: {(analysis.false_positive_probability * 100).toFixed(0)}%</span>
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                <span>Confidence: {(analysis.confidence * 100).toFixed(0)}%</span>
+                                <span>•</span>
+                                <span>False Positive Risk: {(analysis.false_positive_probability * 100).toFixed(0)}%</span>
+                            </div>
                         </div>
-                    </div>
-                ) : (
-                    <div className="py-4 text-center text-sm text-red-500">
-                        Failed to generate analysis.
-                    </div>
-                )}
+                    ) : (
+                        <div className="py-4 text-center text-sm text-red-500">
+                            Failed to generate analysis.
+                        </div>
+                    )}
+                </div>
             </DialogContent>
         </Dialog>
     )

@@ -99,7 +99,7 @@ export function AskComponentDialog({
                     {analysis ? "View Analysis" : "Ask AI"}
                 </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[85vh]">
+            <DialogContent className="!w-[75vw] !h-[75vh] !max-w-none flex flex-col">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Sparkles className="h-5 w-5 text-purple-500" />
@@ -110,7 +110,7 @@ export function AskComponentDialog({
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="space-y-6 py-4">
+                <div className="flex-1 overflow-y-auto space-y-6 py-4">
                     {loading ? (
                         <div className="flex flex-col items-center justify-center py-8 space-y-4">
                             <Loader2 className="h-8 w-8 animate-spin text-purple-500" />

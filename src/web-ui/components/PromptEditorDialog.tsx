@@ -110,7 +110,7 @@ export function PromptEditorDialog({
 
     return (
         <Dialog open={isOpen} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-[95vw] h-[85vh] flex flex-col">
+            <DialogContent className="!w-[75vw] !h-[75vh] !max-w-none flex flex-col">
                 <DialogHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                     <DialogTitle>Prompt Editor</DialogTitle>
                     <div className="flex gap-2">

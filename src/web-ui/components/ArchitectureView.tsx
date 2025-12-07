@@ -202,14 +202,14 @@ export function ArchitectureView({ projectId }: ArchitectureViewProps) {
                                 <History className="mr-2 h-4 w-4" /> History
                             </Button>
                         </DialogTrigger>
-                        <DialogContent className="sm:max-w-[425px]">
+                        <DialogContent className="!w-[75vw] !h-[75vh] !max-w-none flex flex-col">
                             <DialogHeader>
                                 <DialogTitle>Version History</DialogTitle>
                                 <DialogDescription>
                                     Save current state or restore previous versions.
                                 </DialogDescription>
                             </DialogHeader>
-                            <div className="grid gap-4 py-4">
+                            <div className="flex-1 overflow-y-auto grid gap-4 py-4">
                                 <div className="flex gap-2">
                                     <Input
                                         placeholder="Version description..."
@@ -218,7 +218,7 @@ export function ArchitectureView({ projectId }: ArchitectureViewProps) {
                                     />
                                     <Button onClick={saveVersion}>Save New</Button>
                                 </div>
-                                <div className="max-h-[300px] overflow-y-auto space-y-2">
+                                <div className="space-y-2">
                                     {versions.map((v) => (
                                         <div key={v.id} className="flex items-center justify-between p-2 border rounded hover:bg-slate-50 dark:hover:bg-slate-900">
                                             <div>

@@ -140,7 +140,7 @@ function ContributorModal({
 
     return (
         <Dialog open={isOpen} onOpenChange={onClose}>
-            <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden">
+            <DialogContent className="!w-[75vw] !h-[75vh] !max-w-none flex flex-col">
                 {loading ? (
                     <div className="flex items-center justify-center h-64">
                         <DialogHeader>
