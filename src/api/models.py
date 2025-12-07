@@ -20,6 +20,26 @@ class Repository(Base):
     business_criticality = Column(String)
     last_scanned_at = Column(DateTime)
 
+    # GitHub API metadata
+    pushed_at = Column(DateTime)  # Last push to any branch (from GitHub API)
+    github_created_at = Column(DateTime)  # Repo creation date on GitHub
+    github_updated_at = Column(DateTime)  # Last metadata update on GitHub
+    stargazers_count = Column(Integer, default=0)
+    watchers_count = Column(Integer, default=0)
+    forks_count = Column(Integer, default=0)
+    open_issues_count = Column(Integer, default=0)
+    size_kb = Column(Integer, default=0)  # Repository size in KB
+    is_fork = Column(Boolean, default=False)
+    is_archived = Column(Boolean, default=False)
+    is_disabled = Column(Boolean, default=False)
+    is_private = Column(Boolean, default=True)
+    visibility = Column(String)  # public, private, internal
+    topics = Column(JSONB)  # Array of topic tags
+    license_name = Column(String)  # e.g., "MIT", "Apache-2.0"
+    has_wiki = Column(Boolean, default=False)
+    has_pages = Column(Boolean, default=False)
+    has_discussions = Column(Boolean, default=False)
+
     # Self-annealing: Track problematic repos
     failure_count = Column(Integer, default=0)
     last_failure_at = Column(DateTime)
@@ -34,6 +54,37 @@ class Repository(Base):
 
     scan_runs = relationship("ScanRun", back_populates="repository")
     findings = relationship("Finding", back_populates="repository")
+    file_commits = relationship("FileCommit", back_populates="repository")
+    contributors = relationship("Contributor", back_populates="repository")
+    languages = relationship("LanguageStat", back_populates="repository")
+    dependencies = relationship("Dependency", back_populates="repository")
+
+
+class FileCommit(Base):
+    """Tracks the last commit information for specific files in a repository.
+    Used to provide file-level 'Last Commit' data for findings.
+    """
+    __tablename__ = "file_commits"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    repository_id = Column(UUID(as_uuid=True), ForeignKey("repositories.id"), nullable=False)
+    file_path = Column(Text, nullable=False)
+    
+    # Commit information from GitHub API
+    last_commit_sha = Column(String(40))
+    last_commit_date = Column(DateTime)
+    last_commit_author = Column(String)
+    last_commit_message = Column(Text)
+    
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    repository = relationship("Repository", back_populates="file_commits")
+
+    __table_args__ = (
+        UniqueConstraint('repository_id', 'file_path', name='uq_file_commits_repo_path'),
+    )
+
 
 class ScanRun(Base):
     __tablename__ = "scan_runs"

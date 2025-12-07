@@ -101,17 +101,30 @@ export default function FindingsPage() {
             )
         },
         {
-            accessorKey: "repo_last_commit_at",
+            accessorKey: "repo_pushed_at",
             header: ({ column }) => (
                 <DataTableColumnHeader column={column} title="Last Commit" />
             ),
             cell: ({ row }) => {
-                const date = row.getValue("repo_last_commit_at") as string | null
+                // Prefer file-level commit date, fall back to repo pushed_at
+                const fileCommit = row.original.file_last_commit_at as string | null
+                const repoPushed = row.getValue("repo_pushed_at") as string | null
+                const date = fileCommit || repoPushed
+                const isArchived = row.original.is_archived as boolean | null
+                
                 if (!date) return <span className="text-muted-foreground">—</span>
                 return (
-                    <span className="text-sm text-muted-foreground">
-                        {new Date(date).toLocaleDateString()}
-                    </span>
+                    <div className="flex items-center gap-1">
+                        <span className="text-sm text-muted-foreground">
+                            {new Date(date).toLocaleDateString()}
+                        </span>
+                        {fileCommit && (
+                            <span className="text-xs text-blue-500" title="File-level commit date">📄</span>
+                        )}
+                        {isArchived && (
+                            <span className="text-xs text-amber-500" title="Archived repository">📦</span>
+                        )}
+                    </div>
                 )
             }
         }

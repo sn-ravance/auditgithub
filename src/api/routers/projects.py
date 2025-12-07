@@ -27,7 +27,7 @@ async def get_projects(db: Session = Depends(get_db)):
             models.Finding.status == 'open'
         ).count()
 
-        # Get the most recent commit date from contributors
+        # Get the most recent commit date from contributors (fallback)
         last_commit = db.query(func.max(models.Contributor.last_commit_at)).filter(
             models.Contributor.repository_id == p.id
         ).scalar()
@@ -54,11 +54,19 @@ async def get_projects(db: Session = Depends(get_db)):
             "name": p.name,
             "description": p.description,
             "language": p.language or "Unknown",
+            "default_branch": p.default_branch or "main",
             "last_scanned_at": p.last_scanned_at,
-            "last_commit_at": last_commit,
+            # Use pushed_at from GitHub API, fallback to contributor data
+            "last_commit_at": p.pushed_at or last_commit,
+            "pushed_at": p.pushed_at,
+            "visibility": p.visibility,
+            "is_archived": p.is_archived,
+            "is_private": p.is_private,
             "max_severity": max_severity,
             "stats": {
-                "open_findings": open_findings
+                "open_findings": open_findings,
+                "stars": p.stargazers_count or 0,
+                "forks": p.forks_count or 0,
             }
         })
 
@@ -87,16 +95,32 @@ async def get_project_details(project_id: str, db: Session = Depends(get_db)):
     return {
         "id": str(project.id),
         "name": project.name,
+        "full_name": project.full_name,
         "description": project.description,
+        "url": project.url,
         "language": project.language or "Unknown",
         "default_branch": project.default_branch or "main",
         "last_scanned_at": project.last_scanned_at,
+        # GitHub API metadata
+        "pushed_at": project.pushed_at,
+        "github_created_at": project.github_created_at,
+        "github_updated_at": project.github_updated_at,
+        "visibility": project.visibility,
+        "is_archived": project.is_archived,
+        "is_private": project.is_private,
+        "is_fork": project.is_fork,
+        "topics": project.topics or [],
+        "license_name": project.license_name,
+        "has_wiki": project.has_wiki,
+        "has_pages": project.has_pages,
+        "has_discussions": project.has_discussions,
         "stats": {
             "open_findings": open_findings_count,
-            # Placeholders for fields not yet in DB but in UI plan
-            "stars": 0,
-            "forks": 0,
-            "loc": 0
+            "stars": project.stargazers_count or 0,
+            "forks": project.forks_count or 0,
+            "watchers": project.watchers_count or 0,
+            "open_issues": project.open_issues_count or 0,
+            "size_kb": project.size_kb or 0,
         }
     }
 

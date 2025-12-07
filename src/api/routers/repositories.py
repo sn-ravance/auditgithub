@@ -26,8 +26,15 @@ class RepositoryCreate(RepositoryBase):
 
 class Repository(RepositoryBase):
     id: str  # UUID as string
-    api_id: int
+    api_id: Optional[int] = None
     last_scanned_at: Optional[datetime] = None
+    pushed_at: Optional[datetime] = None
+    github_created_at: Optional[datetime] = None
+    stargazers_count: Optional[int] = 0
+    forks_count: Optional[int] = 0
+    is_archived: Optional[bool] = False
+    is_private: Optional[bool] = True
+    visibility: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

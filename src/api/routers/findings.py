@@ -46,9 +46,12 @@ class FindingResponse(BaseModel):
     line_start: Optional[int]
     code_snippet: Optional[str]
     created_at: datetime
-    repo_last_commit_at: Optional[datetime] = None  # Last commit to the repository
+    repo_pushed_at: Optional[datetime] = None  # Last push to repo (from GitHub API)
+    file_last_commit_at: Optional[datetime] = None  # Last commit to specific file
+    file_last_commit_author: Optional[str] = None  # Author of last file commit
     repo_name: str
     repository_id: Optional[str] = None
+    is_archived: Optional[bool] = None  # Is the repo archived
     remediations: List[RemediationModel] = []
 
     model_config = {"from_attributes": True}
@@ -109,20 +112,21 @@ def get_findings(
         
     findings = query.all()
     
-    # Get last commit dates for all repositories in one query
-    repo_ids = list(set(f.repository_id for f in findings if f.repository_id))
-    repo_last_commits: Dict[str, datetime] = {}
-    if repo_ids:
-        last_commits = db.query(
-            models.Contributor.repository_id,
-            func.max(models.Contributor.last_commit_at).label('last_commit')
-        ).filter(
-            models.Contributor.repository_id.in_(repo_ids)
-        ).group_by(models.Contributor.repository_id).all()
-        
-        for repo_id, last_commit in last_commits:
-            if repo_id and last_commit:
-                repo_last_commits[str(repo_id)] = last_commit
+    # Get file commit data for findings with file_paths (batch query)
+    file_commits_map: Dict[str, models.FileCommit] = {}
+    finding_file_keys = [
+        (f.repository_id, f.file_path) 
+        for f in findings 
+        if f.repository_id and f.file_path
+    ]
+    if finding_file_keys:
+        # Query all file commits in one go
+        file_commits = db.query(models.FileCommit).filter(
+            models.FileCommit.repository_id.in_([k[0] for k in finding_file_keys])
+        ).all()
+        for fc in file_commits:
+            key = f"{fc.repository_id}:{fc.file_path}"
+            file_commits_map[key] = fc
     
     return [FindingResponse(
         id=str(f.finding_uuid),
@@ -135,9 +139,12 @@ def get_findings(
         line_start=f.line_start,
         code_snippet=f.code_snippet,
         created_at=f.created_at,
-        repo_last_commit_at=repo_last_commits.get(str(f.repository_id)) if f.repository_id else None,
+        repo_pushed_at=f.repository.pushed_at if f.repository else None,
+        file_last_commit_at=file_commits_map.get(f"{f.repository_id}:{f.file_path}").last_commit_date if f.repository_id and f.file_path and f"{f.repository_id}:{f.file_path}" in file_commits_map else None,
+        file_last_commit_author=file_commits_map.get(f"{f.repository_id}:{f.file_path}").last_commit_author if f.repository_id and f.file_path and f"{f.repository_id}:{f.file_path}" in file_commits_map else None,
         repo_name=f.repository.name if f.repository else "Unknown",
         repository_id=str(f.repository.id) if f.repository else None,
+        is_archived=f.repository.is_archived if f.repository else None,
         remediations=[RemediationModel(
             id=str(r.id),
             remediation_text=r.remediation_text,
@@ -164,13 +171,13 @@ def get_finding(finding_id: str, db: Session = Depends(get_db)):
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found")
 
-    # Get last commit date for the repository
-    repo_last_commit_at = None
-    if finding.repository_id:
-        last_commit = db.query(func.max(models.Contributor.last_commit_at)).filter(
-            models.Contributor.repository_id == finding.repository_id
-        ).scalar()
-        repo_last_commit_at = last_commit
+    # Get file commit data if available
+    file_commit = None
+    if finding.repository_id and finding.file_path:
+        file_commit = db.query(models.FileCommit).filter(
+            models.FileCommit.repository_id == finding.repository_id,
+            models.FileCommit.file_path == finding.file_path
+        ).first()
 
     return FindingResponse(
         id=str(finding.finding_uuid),
@@ -183,9 +190,12 @@ def get_finding(finding_id: str, db: Session = Depends(get_db)):
         line_start=finding.line_start,
         code_snippet=finding.code_snippet,
         created_at=finding.created_at,
-        repo_last_commit_at=repo_last_commit_at,
+        repo_pushed_at=finding.repository.pushed_at if finding.repository else None,
+        file_last_commit_at=file_commit.last_commit_date if file_commit else None,
+        file_last_commit_author=file_commit.last_commit_author if file_commit else None,
         repo_name=finding.repository.name if finding.repository else "Unknown",
         repository_id=str(finding.repository.id) if finding.repository else None,
+        is_archived=finding.repository.is_archived if finding.repository else None,
         remediations=[RemediationModel(
             id=str(r.id),
             remediation_text=r.remediation_text,

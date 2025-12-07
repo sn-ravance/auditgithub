@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { DataTable } from "@/components/data-table"
 import { ColumnDef } from "@tanstack/react-table"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Clock, ScanSearch } from "lucide-react"
+import { Loader2, Clock, ScanSearch, Eye, EyeOff, Globe, Archive } from "lucide-react"
 import Link from "next/link"
 import { DataTableColumnHeader } from "@/components/data-table-column-header"
 
@@ -128,11 +128,64 @@ export default function RepositoriesPage() {
             header: ({ column }) => (
                 <DataTableColumnHeader column={column} title="Name" />
             ),
-            cell: ({ row }) => (
-                <Link href={`/projects/${row.original.id}`} className="font-medium text-blue-600 hover:underline">
-                    {row.getValue("name")}
-                </Link>
-            )
+            cell: ({ row }) => {
+                const isArchived = row.original.is_archived
+                return (
+                    <div className="flex items-center gap-2">
+                        <Link href={`/projects/${row.original.id}`} className="font-medium text-blue-600 hover:underline">
+                            {row.getValue("name")}
+                        </Link>
+                        {isArchived && (
+                            <Badge variant="secondary" className="text-xs">
+                                <Archive className="h-3 w-3 mr-1" />
+                                Archived
+                            </Badge>
+                        )}
+                    </div>
+                )
+            }
+        },
+        {
+            accessorKey: "visibility",
+            header: ({ column }) => (
+                <DataTableColumnHeader column={column} title="Visibility" />
+            ),
+            cell: ({ row }) => {
+                const visibility = row.getValue("visibility") as string | null
+                const isPrivate = row.original.is_private
+                
+                // Determine visibility: use visibility field, fallback to is_private
+                const effectiveVisibility = visibility || (isPrivate ? "private" : "public")
+                
+                if (effectiveVisibility === "public") {
+                    return (
+                        <Badge variant="destructive" className="bg-red-500 hover:bg-red-600">
+                            <Globe className="h-3 w-3 mr-1" />
+                            Public
+                        </Badge>
+                    )
+                } else if (effectiveVisibility === "internal") {
+                    return (
+                        <Badge className="bg-green-500 hover:bg-green-600">
+                            <Eye className="h-3 w-3 mr-1" />
+                            Internal
+                        </Badge>
+                    )
+                } else {
+                    return (
+                        <Badge className="bg-green-500 hover:bg-green-600">
+                            <EyeOff className="h-3 w-3 mr-1" />
+                            Private
+                        </Badge>
+                    )
+                }
+            },
+            filterFn: (row, id, value) => {
+                const visibility = row.getValue(id) as string | null
+                const isPrivate = row.original.is_private
+                const effectiveVisibility = visibility || (isPrivate ? "private" : "public")
+                return value.includes(effectiveVisibility)
+            }
         },
         {
             accessorKey: "last_commit_at",
@@ -140,6 +193,7 @@ export default function RepositoriesPage() {
                 <DataTableColumnHeader column={column} title="Last Commit" />
             ),
             cell: ({ row }) => {
+                // Use pushed_at from GitHub API (already mapped to last_commit_at in API)
                 const commitDays = getDaysSince(row.getValue("last_commit_at") as string)
                 return getCommitAgeBadge(commitDays)
             },

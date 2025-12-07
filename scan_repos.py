@@ -1040,10 +1040,21 @@ def process_repo_with_timeout(
             }
 
 
+def _parse_github_datetime(date_str: Optional[str]) -> Optional[datetime.datetime]:
+    """Parse GitHub API datetime string to Python datetime."""
+    if not date_str:
+        return None
+    try:
+        # GitHub returns ISO 8601 format: 2024-01-15T10:30:00Z
+        return datetime.datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+    except (ValueError, AttributeError):
+        return None
+
+
 def ensure_repo_in_database(repo: dict) -> None:
     """
-    Ensure a repository exists in the database with basic information.
-    Used to add skipped repositories so they appear in the UI.
+    Ensure a repository exists in the database with full GitHub metadata.
+    Creates new repos or updates existing ones with the latest API data.
 
     Args:
         repo: Repository data from GitHub API
@@ -1060,34 +1071,72 @@ def ensure_repo_in_database(repo: dict) -> None:
                 logging.warning("Repository name missing, cannot add to database")
                 return
 
+            # Extract GitHub metadata from API response
+            github_metadata = {
+                'description': repo.get('description') or '',
+                'url': repo.get('html_url', ''),
+                'full_name': repo.get('full_name'),
+                'default_branch': repo.get('default_branch', 'main'),
+                'language': repo.get('language'),
+                'pushed_at': _parse_github_datetime(repo.get('pushed_at')),
+                'github_created_at': _parse_github_datetime(repo.get('created_at')),
+                'github_updated_at': _parse_github_datetime(repo.get('updated_at')),
+                'stargazers_count': repo.get('stargazers_count', 0),
+                'watchers_count': repo.get('watchers_count', 0),
+                'forks_count': repo.get('forks_count', 0),
+                'open_issues_count': repo.get('open_issues_count', 0),
+                'size_kb': repo.get('size', 0),
+                'is_fork': repo.get('fork', False),
+                'is_archived': repo.get('archived', False),
+                'is_disabled': repo.get('disabled', False),
+                'is_private': repo.get('private', True),
+                'visibility': repo.get('visibility'),
+                'topics': repo.get('topics', []),
+                'has_wiki': repo.get('has_wiki', False),
+                'has_pages': repo.get('has_pages', False),
+                'has_discussions': repo.get('has_discussions', False),
+            }
+            
+            # Extract license name if present
+            license_info = repo.get('license')
+            if license_info and isinstance(license_info, dict):
+                github_metadata['license_name'] = license_info.get('spdx_id') or license_info.get('name')
+            
+            # Extract owner info if present
+            owner_info = repo.get('owner')
+            if owner_info and isinstance(owner_info, dict):
+                github_metadata['owner_type'] = owner_info.get('type')
+                github_metadata['owner_id'] = str(owner_info.get('id', ''))
+
             # Check if repository already exists
             existing_repo = db.query(models.Repository).filter(
                 models.Repository.name == repo_name
             ).first()
 
             if existing_repo:
-                logging.debug(f"Repository {repo_name} already exists in database")
+                # Update existing repo with latest GitHub metadata
+                for key, value in github_metadata.items():
+                    if value is not None:  # Only update non-None values
+                        setattr(existing_repo, key, value)
+                db.commit()
+                logging.debug(f"✓ Updated {repo_name} GitHub metadata in database")
                 return
 
-            # Create new repository entry
+            # Create new repository entry with full metadata
             new_repo = models.Repository(
                 name=repo_name,
-                description=repo.get('description', ''),
-                url=repo.get('html_url', ''),
-                default_branch=repo.get('default_branch', 'main'),
-                language=repo.get('language'),
-                last_scanned_at=None  # Not scanned yet
+                **github_metadata
             )
 
             db.add(new_repo)
             db.commit()
-            logging.info(f"✓ Added {repo_name} to database (not yet scanned)")
+            logging.info(f"✓ Added {repo_name} to database with GitHub metadata")
 
         finally:
             db.close()
 
     except Exception as e:
-        logging.error(f"Failed to add repository to database: {e}")
+        logging.error(f"Failed to add/update repository in database: {e}")
 
 
 def was_scanned_within_hours(repo_name: str, hours: int = 48) -> tuple[bool, str]:
@@ -1622,6 +1671,10 @@ def process_repo(repo: Dict[str, Any], report_dir: str, force_rescan: bool = Fal
         safe_repo_name = "".join(c if c.isalnum() or c in '._-' else '_' for c in repo_name)
 
     logging.info(f"Processing repository: {repo_name}")
+    
+    # Always ensure repository metadata is up-to-date in database
+    # This saves all GitHub API metadata (pushed_at, stars, forks, archived, etc.)
+    ensure_repo_in_database(repo)
 
     # Check if already completed (resume functionality) - but respect override_scan
     if resume_state and resume_state.is_completed(repo_name) and not override_scan:
@@ -1679,8 +1732,6 @@ def process_repo(repo: Dict[str, Any], report_dir: str, force_rescan: bool = Fal
     # If we determined we should skip, skip it
     if should_skip:
         logging.info(f"⏭️  Skipping {repo_name}: {skip_reason}")
-        # Ensure the repository exists in the database so it appears in the UI
-        ensure_repo_in_database(repo)
         # Still mark as completed for resume state even if skipped
         if resume_state:
             resume_state.mark_completed(repo_name)

@@ -195,17 +195,51 @@ export function DataTable<TData, TValue>({
     // Storage key for this table
     const storageKey = tableId ? `table-filters-${tableId}` : null
 
-    // Load persisted state
+    // Load persisted state from localStorage
     const loadPersistedState = React.useCallback(() => {
         if (!storageKey || !persistFilters) return null
         const stored = getStorageItem(storageKey)
         if (!stored) return null
         try {
-            return JSON.parse(stored)
+            const parsed = JSON.parse(stored)
+            
+            // Get valid column IDs from current columns definition
+            const validColumnIds = new Set(
+                columns.map(col => {
+                    if ('accessorKey' in col && col.accessorKey) return String(col.accessorKey)
+                    if ('id' in col && col.id) return col.id
+                    return null
+                }).filter(Boolean)
+            )
+            
+            // Filter out invalid column references from persisted state
+            if (parsed.sorting) {
+                parsed.sorting = parsed.sorting.filter((s: any) => validColumnIds.has(s.id))
+            }
+            if (parsed.columnFilters) {
+                parsed.columnFilters = parsed.columnFilters.filter((f: any) => validColumnIds.has(f.id))
+            }
+            if (parsed.columnVisibility) {
+                const validVisibility: Record<string, boolean> = {}
+                for (const [key, value] of Object.entries(parsed.columnVisibility)) {
+                    if (validColumnIds.has(key)) {
+                        validVisibility[key] = value as boolean
+                    }
+                }
+                parsed.columnVisibility = validVisibility
+            }
+            if (parsed.groupByColumn && !validColumnIds.has(parsed.groupByColumn)) {
+                parsed.groupByColumn = undefined
+            }
+            if (parsed.grouping) {
+                parsed.grouping = parsed.grouping.filter((g: string) => validColumnIds.has(g))
+            }
+            
+            return parsed
         } catch {
             return null
         }
-    }, [storageKey, persistFilters])
+    }, [storageKey, persistFilters, columns])
 
     // Initialize state from persisted values or defaults
     const persistedState = React.useMemo(() => loadPersistedState(), [loadPersistedState])

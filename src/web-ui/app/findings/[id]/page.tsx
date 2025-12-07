@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { AiRemediationCard } from "@/components/ai-remediation-card"
 import { ExceptionDialog } from "@/components/ExceptionDialog"
 import { AskAIDialog } from "@/components/AskAIDialog"
-import { Loader2, ArrowLeft, Sparkles } from "lucide-react"
+import { Loader2, ArrowLeft, Sparkles, GitCommit, User, Calendar, Clock, FileCode, Archive } from "lucide-react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import ReactMarkdown from "react-markdown"
@@ -137,6 +137,99 @@ export default function FindingDetailsPage() {
                                     <p className="text-sm font-mono bg-muted p-2 rounded">
                                         {finding.file_path}:{finding.line_start}
                                     </p>
+                                </div>
+                            )}
+                            
+                            {/* File Commit History - from GitHub API */}
+                            {(finding.file_last_commit_at || finding.repo_pushed_at) && (
+                                <div className="border-t pt-4">
+                                    <h3 className="font-semibold flex items-center gap-2 mb-3">
+                                        <GitCommit className="h-4 w-4 text-muted-foreground" />
+                                        File History
+                                    </h3>
+                                    <div className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 rounded-lg p-4 space-y-3">
+                                        {finding.file_last_commit_at ? (
+                                            <>
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2 text-sm">
+                                                        <Calendar className="h-4 w-4 text-blue-500" />
+                                                        <span className="text-muted-foreground">Last File Commit</span>
+                                                    </div>
+                                                    <div className="text-sm font-medium">
+                                                        {new Date(finding.file_last_commit_at).toLocaleDateString("en-US", {
+                                                            year: "numeric",
+                                                            month: "short",
+                                                            day: "numeric",
+                                                            hour: "2-digit",
+                                                            minute: "2-digit"
+                                                        })}
+                                                    </div>
+                                                </div>
+                                                {finding.file_last_commit_author && (
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex items-center gap-2 text-sm">
+                                                            <User className="h-4 w-4 text-green-500" />
+                                                            <span className="text-muted-foreground">Last Author</span>
+                                                        </div>
+                                                        <div className="text-sm font-medium">
+                                                            {finding.file_last_commit_author}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t border-slate-200 dark:border-slate-700">
+                                                    <div className="flex items-center gap-1">
+                                                        <FileCode className="h-3 w-3" />
+                                                        <span>File-level commit data from GitHub</span>
+                                                    </div>
+                                                    {(() => {
+                                                        const days = Math.floor((new Date().getTime() - new Date(finding.file_last_commit_at).getTime()) / (1000 * 60 * 60 * 24))
+                                                        const years = Math.floor(days / 365)
+                                                        if (years > 0) {
+                                                            return (
+                                                                <Badge variant={years > 2 ? "destructive" : "secondary"} className="text-xs">
+                                                                    <Clock className="h-3 w-3 mr-1" />
+                                                                    {years}y old
+                                                                </Badge>
+                                                            )
+                                                        }
+                                                        return (
+                                                            <Badge variant="secondary" className="text-xs">
+                                                                <Clock className="h-3 w-3 mr-1" />
+                                                                {days}d old
+                                                            </Badge>
+                                                        )
+                                                    })()}
+                                                </div>
+                                            </>
+                                        ) : finding.repo_pushed_at && (
+                                            <>
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2 text-sm">
+                                                        <Calendar className="h-4 w-4 text-amber-500" />
+                                                        <span className="text-muted-foreground">Last Repo Push</span>
+                                                    </div>
+                                                    <div className="text-sm font-medium">
+                                                        {new Date(finding.repo_pushed_at).toLocaleDateString("en-US", {
+                                                            year: "numeric",
+                                                            month: "short",
+                                                            day: "numeric"
+                                                        })}
+                                                    </div>
+                                                </div>
+                                                <div className="text-xs text-muted-foreground">
+                                                    Repository-level data (file-specific commit not yet synced)
+                                                </div>
+                                            </>
+                                        )}
+                                        {finding.is_archived && (
+                                            <div className="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                                                <Badge variant="secondary" className="text-xs">
+                                                    <Archive className="h-3 w-3 mr-1" />
+                                                    Archived Repository
+                                                </Badge>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
                         </CardContent>
