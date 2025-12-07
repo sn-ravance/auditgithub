@@ -34,3 +34,7 @@ psycopg2-binary>=2.9.0
 pydantic>=2.0.0
 python-multipart>=0.0.6
 diagrams>=0.23.0
+
+# Export/Report Generation
+reportlab>=4.0.0  # For PDF generation
+python-docx>=0.8.11  # For DOCX generation

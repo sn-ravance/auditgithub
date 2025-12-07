@@ -9,6 +9,9 @@ import {
     Users,
     AlertTriangle,
     GitBranch,
+    Search,
+    ClipboardList,
+    ChevronDown,
 } from "lucide-react"
 
 import {
@@ -21,10 +24,40 @@ import {
     SidebarMenu,
     SidebarMenuButton,
     SidebarMenuItem,
+    SidebarMenuSub,
+    SidebarMenuSubButton,
+    SidebarMenuSubItem,
     SidebarRail,
 } from "@/components/ui/sidebar"
 
-const data = {
+import {
+    Collapsible,
+    CollapsibleContent,
+    CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+
+interface NavSubItem {
+    title: string
+    url: string
+    icon: React.ComponentType<{ className?: string }>
+}
+
+interface NavItem {
+    title: string
+    url?: string
+    icon: React.ComponentType<{ className?: string }>
+    isActive?: boolean
+    isExpandable?: boolean
+    items?: NavSubItem[]
+}
+
+interface NavGroup {
+    title: string
+    url: string
+    items: NavItem[]
+}
+
+const data: { navMain: NavGroup[] } = {
     navMain: [
         {
             title: "Platform",
@@ -34,7 +67,6 @@ const data = {
                     title: "Dashboard",
                     url: "/",
                     icon: LayoutDashboard,
-                    isActive: true,
                 },
                 {
                     title: "Findings",
@@ -48,8 +80,20 @@ const data = {
                 },
                 {
                     title: "Zero Day Analysis",
-                    url: "/zero-day",
                     icon: ShieldCheck,
+                    isExpandable: true,
+                    items: [
+                        {
+                            title: "Analysis",
+                            url: "/zero-day",
+                            icon: Search,
+                        },
+                        {
+                            title: "ZDA Reports",
+                            url: "/zero-day/reports",
+                            icon: ClipboardList,
+                        },
+                    ],
                 },
             ],
         },
@@ -68,6 +112,8 @@ const data = {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+    const [zdaOpen, setZdaOpen] = React.useState(true)
+
     return (
         <Sidebar {...props}>
             <SidebarHeader>
@@ -83,14 +129,47 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         <SidebarGroupContent>
                             <SidebarMenu>
                                 {group.items.map((item) => (
-                                    <SidebarMenuItem key={item.title}>
-                                        <SidebarMenuButton asChild isActive={item.isActive}>
-                                            <a href={item.url}>
-                                                <item.icon className="h-4 w-4" />
-                                                <span>{item.title}</span>
-                                            </a>
-                                        </SidebarMenuButton>
-                                    </SidebarMenuItem>
+                                    item.isExpandable ? (
+                                        <Collapsible
+                                            key={item.title}
+                                            open={zdaOpen}
+                                            onOpenChange={setZdaOpen}
+                                            className="group/collapsible"
+                                        >
+                                            <SidebarMenuItem>
+                                                <CollapsibleTrigger asChild>
+                                                    <SidebarMenuButton>
+                                                        <item.icon className="h-4 w-4" />
+                                                        <span>{item.title}</span>
+                                                        <ChevronDown className="ml-auto h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                                                    </SidebarMenuButton>
+                                                </CollapsibleTrigger>
+                                                <CollapsibleContent>
+                                                    <SidebarMenuSub>
+                                                        {item.items?.map((subItem) => (
+                                                            <SidebarMenuSubItem key={subItem.title}>
+                                                                <SidebarMenuSubButton asChild>
+                                                                    <a href={subItem.url}>
+                                                                        <subItem.icon className="h-4 w-4" />
+                                                                        <span>{subItem.title}</span>
+                                                                    </a>
+                                                                </SidebarMenuSubButton>
+                                                            </SidebarMenuSubItem>
+                                                        ))}
+                                                    </SidebarMenuSub>
+                                                </CollapsibleContent>
+                                            </SidebarMenuItem>
+                                        </Collapsible>
+                                    ) : (
+                                        <SidebarMenuItem key={item.title}>
+                                            <SidebarMenuButton asChild isActive={item.isActive}>
+                                                <a href={item.url}>
+                                                    <item.icon className="h-4 w-4" />
+                                                    <span>{item.title}</span>
+                                                </a>
+                                            </SidebarMenuButton>
+                                        </SidebarMenuItem>
+                                    )
                                 ))}
                             </SidebarMenu>
                         </SidebarGroupContent>

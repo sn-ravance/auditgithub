@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useState, useEffect } from "react"
-import { Send, Loader2, ShieldAlert, CheckCircle2, Search, ChevronRight, Trash2, Clock, FileEdit } from "lucide-react"
+import { Send, Loader2, ShieldAlert, CheckCircle2, Search, Clock, FileEdit, Download, ClipboardList } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,6 +11,12 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { PromptEditorDialog } from "@/components/PromptEditorDialog"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import ReactMarkdown from "react-markdown"
 
 interface RepositoryResult {
@@ -85,24 +91,6 @@ export function ZeroDayView() {
         }
     }
 
-    // Restore previous query
-    const restoreQuery = (entry: QueryHistory) => {
-        setQuery(entry.query)
-        setSelectedScopes(entry.scope)
-        setResult(entry.result)
-        setError(null)
-    }
-
-    // Clear history
-    const clearHistory = () => {
-        setQueryHistory([])
-        try {
-            localStorage.removeItem('zda-history')
-        } catch (err) {
-            console.error('Failed to clear history:', err)
-        }
-    }
-
     const handleScopeToggle = (scopeId: string) => {
         if (scopeId === "all") {
             setSelectedScopes(["all"])
@@ -154,6 +142,214 @@ export function ZeroDayView() {
         } finally {
             setIsLoading(false)
         }
+    }
+
+    // Export functionality
+    const handleExport = async (format: 'pdf' | 'json' | 'docx' | 'csv' | 'md') => {
+        if (!result) return
+
+        const exportData = {
+            query,
+            timestamp: new Date().toISOString(),
+            scope: selectedScopes,
+            analysis: result.answer,
+            affected_repositories: result.affected_repositories,
+            plan: result.plan,
+            execution_summary: result.execution_summary
+        }
+
+        try {
+            // For JSON and Markdown, handle client-side
+            if (format === 'json') {
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+                downloadBlob(blob, `zda-analysis-${Date.now()}.json`)
+                return
+            }
+
+            if (format === 'md') {
+                const markdown = generateMarkdown(exportData)
+                const blob = new Blob([markdown], { type: 'text/markdown' })
+                downloadBlob(blob, `zda-analysis-${Date.now()}.md`)
+                return
+            }
+
+            if (format === 'csv') {
+                const csv = generateCSV(result.affected_repositories)
+                const blob = new Blob([csv], { type: 'text/csv' })
+                downloadBlob(blob, `zda-analysis-${Date.now()}.csv`)
+                return
+            }
+
+            // For PDF and DOCX, call backend API
+            const response = await fetch(`http://localhost:8000/ai/zero-day/export/${format}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(exportData)
+            })
+
+            if (!response.ok) throw new Error('Export failed')
+
+            const blob = await response.blob()
+            const extension = format === 'pdf' ? 'pdf' : 'docx'
+            downloadBlob(blob, `zda-analysis-${Date.now()}.${extension}`)
+
+        } catch (err) {
+            console.error('Export failed:', err)
+            setError('Export failed. Please try again.')
+        }
+    }
+
+    const downloadBlob = (blob: Blob, filename: string) => {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = filename
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+    }
+
+    const generateMarkdown = (data: any): string => {
+        const lines = [
+            `# Zero Day Analysis Report`,
+            ``,
+            `**Generated:** ${new Date(data.timestamp).toLocaleString()}`,
+            `**Query:** ${data.query}`,
+            `**Scope:** ${data.scope.join(', ')}`,
+            ``,
+            `---`,
+            ``,
+            `## AI Analysis`,
+            ``,
+            data.analysis,
+            ``,
+            `---`,
+            ``,
+            `## Affected Repositories (${data.affected_repositories.length})`,
+            ``
+        ]
+
+        if (data.affected_repositories.length === 0) {
+            lines.push(`No affected repositories found.`)
+        } else {
+            lines.push(`| Repository | Reason | Source |`)
+            lines.push(`|------------|--------|--------|`)
+            data.affected_repositories.forEach((repo: any) => {
+                lines.push(`| ${repo.repository} | ${repo.reason || 'Context match'} | ${repo.source || '-'} |`)
+            })
+        }
+
+        if (data.plan) {
+            lines.push(``, `---`, ``, `## Analysis Strategy`, ``, '```json', JSON.stringify(data.plan, null, 2), '```')
+        }
+
+        return lines.join('\n')
+    }
+
+    const generateCSV = (repositories: any[]): string => {
+        const headers = ['Repository', 'Repository ID', 'Reason', 'Source', 'Matched Sources']
+        const rows = repositories.map(repo => [
+            repo.repository,
+            repo.repository_id,
+            repo.reason || 'Context match',
+            repo.source || '',
+            (repo.matched_sources || []).join('; ')
+        ])
+
+        const escape = (val: string) => `"${(val || '').replace(/"/g, '""')}"`
+        const csvLines = [
+            headers.join(','),
+            ...rows.map(row => row.map(escape).join(','))
+        ]
+
+        return csvLines.join('\n')
+    }
+
+    // Export functionality for Repository List
+    const handleExportRepoList = async (format: 'pdf' | 'json' | 'docx' | 'csv' | 'md') => {
+        if (!result || !result.affected_repositories) return
+
+        const exportData = {
+            query,
+            timestamp: new Date().toISOString(),
+            scope: selectedScopes,
+            total_repositories: result.affected_repositories.length,
+            repositories: result.affected_repositories
+        }
+
+        try {
+            // For JSON, handle client-side
+            if (format === 'json') {
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+                downloadBlob(blob, `affected-repos-${Date.now()}.json`)
+                return
+            }
+
+            // For Markdown, handle client-side
+            if (format === 'md') {
+                const markdown = generateRepoListMarkdown(exportData)
+                const blob = new Blob([markdown], { type: 'text/markdown' })
+                downloadBlob(blob, `affected-repos-${Date.now()}.md`)
+                return
+            }
+
+            // For CSV, handle client-side
+            if (format === 'csv') {
+                const csv = generateCSV(result.affected_repositories)
+                const blob = new Blob([csv], { type: 'text/csv' })
+                downloadBlob(blob, `affected-repos-${Date.now()}.csv`)
+                return
+            }
+
+            // For PDF and DOCX, call backend API
+            const response = await fetch(`http://localhost:8000/ai/zero-day/export/repos/${format}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(exportData)
+            })
+
+            if (!response.ok) throw new Error('Export failed')
+
+            const blob = await response.blob()
+            const extension = format === 'pdf' ? 'pdf' : 'docx'
+            downloadBlob(blob, `affected-repos-${Date.now()}.${extension}`)
+
+        } catch (err) {
+            console.error('Export failed:', err)
+            setError('Export failed. Please try again.')
+        }
+    }
+
+    const generateRepoListMarkdown = (data: any): string => {
+        const lines = [
+            `# Affected Repositories Report`,
+            ``,
+            `**Generated:** ${new Date(data.timestamp).toLocaleString()}`,
+            `**Query:** ${data.query}`,
+            `**Scope:** ${data.scope.join(', ')}`,
+            `**Total Repositories:** ${data.total_repositories}`,
+            ``,
+            `---`,
+            ``,
+            `## Repository List`,
+            ``
+        ]
+
+        if (data.repositories.length === 0) {
+            lines.push(`No affected repositories found.`)
+        } else {
+            lines.push(`| # | Repository | Reason | Source | Matched Sources |`)
+            lines.push(`|---|------------|--------|--------|-----------------|`)
+            data.repositories.forEach((repo: any, idx: number) => {
+                const matchedSources = (repo.matched_sources || []).join(', ') || '-'
+                lines.push(`| ${idx + 1} | ${repo.repository} | ${repo.reason || 'Context match'} | ${repo.source || '-'} | ${matchedSources} |`)
+            })
+        }
+
+        lines.push(``, `---`, ``, `*Report generated from Zero Day Analysis*`)
+
+        return lines.join('\n')
     }
 
     return (
@@ -227,6 +423,15 @@ export function ZeroDayView() {
                             ))}
                         </div>
                     </div>
+
+                    {/* Link to ZDA Reports */}
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground pt-2 border-t">
+                        <ClipboardList className="h-4 w-4" />
+                        <span>View your saved analyses in</span>
+                        <a href="/zero-day/reports" className="text-primary hover:underline font-medium">
+                            ZDA Reports
+                        </a>
+                    </div>
                 </CardContent>
             </Card>
 
@@ -238,64 +443,43 @@ export function ZeroDayView() {
                 </Alert>
             )}
 
-            {/* Recent Analyses */}
-            {queryHistory.length > 0 && !result && (
-                <Card>
-                    <CardHeader>
-                        <div className="flex justify-between items-center">
-                            <div>
-                                <CardTitle className="flex items-center gap-2">
-                                    <Clock className="h-5 w-5" />
-                                    Recent Analyses
-                                </CardTitle>
-                                <CardDescription>Click to restore previous results</CardDescription>
-                            </div>
-                            <Button variant="ghost" size="sm" onClick={clearHistory}>
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Clear History
-                            </Button>
-                        </div>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-2">
-                            {queryHistory.map((entry) => (
-                                <div
-                                    key={entry.id}
-                                    className="flex justify-between items-center p-3 border rounded-lg cursor-pointer hover:bg-accent transition-colors"
-                                    onClick={() => restoreQuery(entry)}
-                                >
-                                    <div className="flex-1 min-w-0">
-                                        <p className="font-medium text-sm truncate">{entry.query}</p>
-                                        <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
-                                            <span>{new Date(entry.timestamp).toLocaleString()}</span>
-                                            <span>•</span>
-                                            <span className={entry.repoCount > 0 ? "text-orange-600 dark:text-orange-400" : "text-green-600 dark:text-green-400"}>
-                                                {entry.repoCount} repo{entry.repoCount !== 1 ? 's' : ''} found
-                                            </span>
-                                            {entry.scope && entry.scope.length > 0 && !entry.scope.includes("all") && (
-                                                <>
-                                                    <span>•</span>
-                                                    <span className="text-blue-600 dark:text-blue-400">
-                                                        {entry.scope.join(', ')}
-                                                    </span>
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0 ml-2" />
-                                </div>
-                            ))}
-                        </div>
-                    </CardContent>
-                </Card>
-            )}
-
             {result && (
                 <div className="space-y-6">
                     <div className="grid gap-6 md:grid-cols-2">
                         <Card className="md:col-span-2">
                             <CardHeader>
-                                <CardTitle>AI Analysis</CardTitle>
+                                <div className="flex items-center justify-between">
+                                    <CardTitle>AI Analysis</CardTitle>
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                title="Download Report"
+                                                aria-label="Download Report"
+                                            >
+                                                <Download className="h-4 w-4" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                            <DropdownMenuItem onClick={() => handleExport('pdf')}>
+                                                Export as PDF
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => handleExport('json')}>
+                                                Export as JSON
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => handleExport('docx')}>
+                                                Export as DOCX
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => handleExport('csv')}>
+                                                Export as CSV
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onClick={() => handleExport('md')}>
+                                                Export as Markdown
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                </div>
                             </CardHeader>
                             <CardContent className="prose dark:prose-invert max-w-none">
                                 <ReactMarkdown>{result.answer}</ReactMarkdown>
@@ -305,10 +489,43 @@ export function ZeroDayView() {
 
                     <Card>
                         <CardHeader>
-                            <CardTitle>Affected Repositories ({result.affected_repositories.length})</CardTitle>
-                            <CardDescription>
-                                Projects identified based on your query.
-                            </CardDescription>
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <CardTitle>Affected Repositories ({result.affected_repositories.length})</CardTitle>
+                                    <CardDescription>
+                                        Projects identified based on your query.
+                                    </CardDescription>
+                                </div>
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            title="Download List"
+                                            aria-label="Download List"
+                                        >
+                                            <Download className="h-4 w-4" />
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                        <DropdownMenuItem onClick={() => handleExportRepoList('pdf')}>
+                                            Export as PDF
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExportRepoList('json')}>
+                                            Export as JSON
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExportRepoList('docx')}>
+                                            Export as DOCX
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExportRepoList('csv')}>
+                                            Export as CSV
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem onClick={() => handleExportRepoList('md')}>
+                                            Export as Markdown
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                            </div>
                         </CardHeader>
                         <CardContent>
                             {result.affected_repositories.length === 0 ? (

@@ -5,6 +5,8 @@ import uuid
 import shutil
 from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from io import BytesIO
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -499,6 +501,322 @@ async def validate_zero_day_prompt(
             "success": False,
             "response": f"❌ **Validation Error**\n\n{str(e)}"
         }
+
+
+# Zero Day Analysis Export Endpoints
+@router.post("/zero-day/export/pdf")
+async def export_zda_pdf(request: dict):
+    """Export Zero Day Analysis as PDF."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.units import inch
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Title
+        title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18, spaceAfter=12)
+        story.append(Paragraph("Zero Day Analysis Report", title_style))
+        story.append(Spacer(1, 12))
+
+        # Metadata
+        meta_style = styles['Normal']
+        story.append(Paragraph(f"<b>Query:</b> {request.get('query', 'N/A')}", meta_style))
+        story.append(Paragraph(f"<b>Generated:</b> {request.get('timestamp', 'N/A')}", meta_style))
+        scope_list = request.get('scope', [])
+        scope_str = ', '.join(scope_list) if isinstance(scope_list, list) else str(scope_list)
+        story.append(Paragraph(f"<b>Scope:</b> {scope_str}", meta_style))
+        story.append(Spacer(1, 20))
+
+        # Analysis
+        story.append(Paragraph("AI Analysis", styles['Heading2']))
+        story.append(Spacer(1, 8))
+        analysis_text = request.get('analysis', '').replace('\n', '<br/>')
+        # Escape XML special characters
+        analysis_text = analysis_text.replace('&', '&amp;').replace('<br/>', '<br/>').replace('&amp;', '&')
+        try:
+            story.append(Paragraph(analysis_text, meta_style))
+        except Exception:
+            # Fallback to plain text if XML parsing fails
+            story.append(Paragraph(request.get('analysis', '').replace('\n', ' ')[:2000], meta_style))
+        story.append(Spacer(1, 20))
+
+        # Affected Repositories
+        repos = request.get('affected_repositories', [])
+        story.append(Paragraph(f"Affected Repositories ({len(repos)})", styles['Heading2']))
+        story.append(Spacer(1, 8))
+
+        if repos:
+            table_data = [['Repository', 'Reason', 'Source']]
+            for repo in repos:
+                table_data.append([
+                    repo.get('repository', '')[:30],
+                    repo.get('reason', 'Context match')[:40],
+                    repo.get('source', '-')[:20]
+                ])
+
+            table = Table(table_data, colWidths=[2.5*inch, 2.5*inch, 1.5*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            story.append(table)
+        else:
+            story.append(Paragraph("No affected repositories found.", meta_style))
+
+        doc.build(story)
+        buffer.seek(0)
+
+        return StreamingResponse(
+            buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=zda-analysis.pdf"}
+        )
+
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PDF generation requires reportlab. Install with: pip install reportlab")
+    except Exception as e:
+        logger.error(f"PDF generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
+
+@router.post("/zero-day/export/docx")
+async def export_zda_docx(request: dict):
+    """Export Zero Day Analysis as DOCX."""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        doc = Document()
+
+        # Title
+        title = doc.add_heading('Zero Day Analysis Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Metadata
+        doc.add_paragraph(f"Query: {request.get('query', 'N/A')}")
+        doc.add_paragraph(f"Generated: {request.get('timestamp', 'N/A')}")
+        scope_list = request.get('scope', [])
+        scope_str = ', '.join(scope_list) if isinstance(scope_list, list) else str(scope_list)
+        doc.add_paragraph(f"Scope: {scope_str}")
+
+        # Analysis
+        doc.add_heading('AI Analysis', level=1)
+        doc.add_paragraph(request.get('analysis', ''))
+
+        # Affected Repositories
+        repos = request.get('affected_repositories', [])
+        doc.add_heading(f'Affected Repositories ({len(repos)})', level=1)
+
+        if repos:
+            table = doc.add_table(rows=1, cols=3)
+            table.style = 'Table Grid'
+            header_cells = table.rows[0].cells
+            header_cells[0].text = 'Repository'
+            header_cells[1].text = 'Reason'
+            header_cells[2].text = 'Source'
+
+            for repo in repos:
+                row_cells = table.add_row().cells
+                row_cells[0].text = repo.get('repository', '')
+                row_cells[1].text = repo.get('reason', 'Context match')
+                row_cells[2].text = repo.get('source', '-')
+        else:
+            doc.add_paragraph('No affected repositories found.')
+
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": "attachment; filename=zda-analysis.docx"}
+        )
+
+    except ImportError:
+        raise HTTPException(status_code=500, detail="DOCX generation requires python-docx. Install with: pip install python-docx")
+    except Exception as e:
+        logger.error(f"DOCX generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"DOCX generation failed: {str(e)}")
+
+
+# Zero Day Analysis - Repository List Export Endpoints
+@router.post("/zero-day/export/repos/pdf")
+async def export_zda_repos_pdf(request: dict):
+    """Export Zero Day Analysis affected repositories as PDF."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.units import inch
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Title
+        title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18, spaceAfter=12)
+        story.append(Paragraph("Affected Repositories Report", title_style))
+        story.append(Spacer(1, 12))
+
+        # Metadata
+        meta_style = styles['Normal']
+        story.append(Paragraph(f"<b>Query:</b> {request.get('query', 'N/A')}", meta_style))
+        story.append(Paragraph(f"<b>Generated:</b> {request.get('timestamp', 'N/A')}", meta_style))
+        scope_list = request.get('scope', [])
+        scope_str = ', '.join(scope_list) if isinstance(scope_list, list) else str(scope_list)
+        story.append(Paragraph(f"<b>Scope:</b> {scope_str}", meta_style))
+        story.append(Paragraph(f"<b>Total Repositories:</b> {request.get('total_repositories', 0)}", meta_style))
+        story.append(Spacer(1, 20))
+
+        # Repository Table
+        repos = request.get('repositories', [])
+        story.append(Paragraph("Repository List", styles['Heading2']))
+        story.append(Spacer(1, 8))
+
+        if repos:
+            table_data = [['#', 'Repository', 'Reason', 'Source']]
+            for idx, repo in enumerate(repos, 1):
+                table_data.append([
+                    str(idx),
+                    repo.get('repository', '')[:25],
+                    repo.get('reason', 'Context match')[:35],
+                    repo.get('source', '-')[:15]
+                ])
+
+            table = Table(table_data, colWidths=[0.4*inch, 2.0*inch, 2.8*inch, 1.3*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a5f')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+                ('ALIGN', (1, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f5f5f5')),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')]),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 1), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+            ]))
+            story.append(table)
+        else:
+            story.append(Paragraph("No affected repositories found.", meta_style))
+
+        # Footer
+        story.append(Spacer(1, 30))
+        footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.grey)
+        story.append(Paragraph("Report generated from Zero Day Analysis", footer_style))
+
+        doc.build(story)
+        buffer.seek(0)
+
+        return StreamingResponse(
+            buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=affected-repos.pdf"}
+        )
+
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PDF generation requires reportlab. Install with: pip install reportlab")
+    except Exception as e:
+        logger.error(f"PDF generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
+
+@router.post("/zero-day/export/repos/docx")
+async def export_zda_repos_docx(request: dict):
+    """Export Zero Day Analysis affected repositories as DOCX."""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+
+        doc = Document()
+
+        # Title
+        title = doc.add_heading('Affected Repositories Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Metadata
+        doc.add_paragraph(f"Query: {request.get('query', 'N/A')}")
+        doc.add_paragraph(f"Generated: {request.get('timestamp', 'N/A')}")
+        scope_list = request.get('scope', [])
+        scope_str = ', '.join(scope_list) if isinstance(scope_list, list) else str(scope_list)
+        doc.add_paragraph(f"Scope: {scope_str}")
+        doc.add_paragraph(f"Total Repositories: {request.get('total_repositories', 0)}")
+
+        doc.add_paragraph()  # Spacer
+
+        # Repository List
+        doc.add_heading('Repository List', level=1)
+        repos = request.get('repositories', [])
+
+        if repos:
+            table = doc.add_table(rows=1, cols=4)
+            table.style = 'Table Grid'
+
+            # Header row
+            header_cells = table.rows[0].cells
+            headers = ['#', 'Repository', 'Reason', 'Source']
+            for i, header in enumerate(headers):
+                header_cells[i].text = header
+                # Bold header
+                for paragraph in header_cells[i].paragraphs:
+                    for run in paragraph.runs:
+                        run.bold = True
+
+            # Data rows
+            for idx, repo in enumerate(repos, 1):
+                row_cells = table.add_row().cells
+                row_cells[0].text = str(idx)
+                row_cells[1].text = repo.get('repository', '')
+                row_cells[2].text = repo.get('reason', 'Context match')
+                row_cells[3].text = repo.get('source', '-')
+        else:
+            doc.add_paragraph('No affected repositories found.')
+
+        # Footer
+        doc.add_paragraph()
+        footer = doc.add_paragraph('Report generated from Zero Day Analysis')
+        footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": "attachment; filename=affected-repos.docx"}
+        )
+
+    except ImportError:
+        raise HTTPException(status_code=500, detail="DOCX generation requires python-docx. Install with: pip install python-docx")
+    except Exception as e:
+        logger.error(f"DOCX generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"DOCX generation failed: {str(e)}")
+
 
 from ..database import get_db
 from .. import models

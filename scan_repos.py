@@ -1623,8 +1623,8 @@ def process_repo(repo: Dict[str, Any], report_dir: str, force_rescan: bool = Fal
 
     logging.info(f"Processing repository: {repo_name}")
 
-    # Check if already completed (resume functionality)
-    if resume_state and resume_state.is_completed(repo_name):
+    # Check if already completed (resume functionality) - but respect override_scan
+    if resume_state and resume_state.is_completed(repo_name) and not override_scan:
         logging.info(f"✅ Skipping {repo_name}: Already completed in previous run")
         return
 
