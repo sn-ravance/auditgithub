@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     AI_MODEL: str = ""  # Fallback - typically use provider-specific model
     
     OLLAMA_BASE_URL: str = "http://ollama:11434"
-    DOCKER_BASE_URL: str = "http://host.docker.internal:11434"
+    DOCKER_BASE_URL: str = "http://localhost:12434"  # Docker Model Runner
+    DOCKER_MODEL: str = "ai/llama3.2:latest"  # Default model for Docker Model Runner
     
     AZURE_AI_FOUNDRY_ENDPOINT: str = ""
     AZURE_AI_FOUNDRY_API_KEY: str = ""

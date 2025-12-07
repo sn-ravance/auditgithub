@@ -5,9 +5,13 @@ import { useParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { AiRemediationCard } from "@/components/ai-remediation-card"
-import { Loader2, ArrowLeft } from "lucide-react"
+import { ExceptionDialog } from "@/components/ExceptionDialog"
+import { AskAIDialog } from "@/components/AskAIDialog"
+import { Loader2, ArrowLeft, Sparkles } from "lucide-react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 
 const API_BASE = "http://localhost:8000"
 
@@ -62,30 +66,60 @@ export default function FindingDetailsPage() {
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">{finding.title}</h1>
                     <div className="flex items-center gap-2 text-muted-foreground">
-                        <span>{finding.repo_name}</span>
+                        {finding.repository_id ? (
+                            <Link href={`/projects/${finding.repository_id}`} className="text-blue-600 hover:underline">
+                                {finding.repo_name}
+                            </Link>
+                        ) : (
+                            <span>{finding.repo_name}</span>
+                        )}
                         <span>•</span>
                         <span>{finding.id.substring(0, 8)}</span>
                     </div>
                 </div>
-                <Badge
-                    className={`ml-auto ${finding.severity === "Critical" ? "bg-red-500" :
-                        finding.severity === "High" ? "bg-orange-500" : "bg-blue-500"
-                        }`}
-                >
-                    {finding.severity}
-                </Badge>
+                <div className="ml-auto flex items-center gap-2">
+                    <ExceptionDialog finding={finding} onDeleted={() => router.push("/findings")} />
+                    <Badge
+                        className={
+                            finding.severity === "Critical" ? "bg-red-500" :
+                            finding.severity === "High" ? "bg-orange-500" : "bg-blue-500"
+                        }
+                    >
+                        {finding.severity}
+                    </Badge>
+                </div>
             </div>
 
             <div className="grid gap-6 md:grid-cols-2">
                 <div className="space-y-6">
                     <Card>
-                        <CardHeader>
+                        <CardHeader className="flex flex-row items-center justify-between space-y-0">
                             <CardTitle>Details</CardTitle>
+                            <AskAIDialog findingId={finding.id} onDescriptionUpdated={() => {
+                                // Refresh finding data after description update
+                                fetch(`${API_BASE}/findings/${id}`)
+                                    .then(res => res.json())
+                                    .then(data => setFinding(data))
+                            }} />
                         </CardHeader>
                         <CardContent className="space-y-4">
                             <div>
-                                <h3 className="font-semibold">Description</h3>
-                                <p className="text-sm text-muted-foreground">{finding.description}</p>
+                                <h3 className="font-semibold mb-2">Description</h3>
+                                {finding.description?.startsWith('**AI Security Analysis') ? (
+                                    <div className="rounded-lg border bg-gradient-to-br from-purple-50 to-blue-50 dark:from-purple-950/20 dark:to-blue-950/20 p-4">
+                                        <div className="flex items-center gap-2 mb-3 text-purple-600 dark:text-purple-400">
+                                            <Sparkles className="h-4 w-4" />
+                                            <span className="text-xs font-medium uppercase tracking-wide">AI-Enhanced Description</span>
+                                        </div>
+                                        <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-base prose-headings:font-semibold prose-p:text-muted-foreground prose-ul:text-muted-foreground prose-li:text-muted-foreground">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{finding.description}</ReactMarkdown>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-muted-foreground bg-muted p-3 rounded-md">
+                                        {finding.description || 'No description available.'}
+                                    </p>
+                                )}
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>

@@ -218,7 +218,7 @@ export function SbomView({ projectId }: SbomViewProps) {
                     Total Components: <span className="font-medium text-foreground">{dependencies.length}</span>
                 </div>
             </div>
-            <DataTable columns={columns} data={dependencies} searchKey="name" />
+            <DataTable columns={columns} data={dependencies} searchKey="name" tableId="sbom-dependencies" />
         </div>
     )
 }

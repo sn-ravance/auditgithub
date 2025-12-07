@@ -4,6 +4,7 @@ Ollama provider implementation for local LLM support.
 import logging
 import json
 import os
+import re
 from typing import Dict, Any, Optional, List
 from openai import AsyncOpenAI
 
@@ -16,6 +17,80 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_json_from_response(content: str) -> str:
+    """
+    Extract JSON from a response that may be wrapped in markdown code blocks.
+    Handles responses like: ```json\n{...}\n```
+    Also handles malformed JSON with backticks inside string values.
+    """
+    if not content:
+        return content
+    
+    # Try to find JSON in markdown code blocks
+    # Match ```json or ``` followed by JSON content
+    patterns = [
+        r'```(?:json)?\s*\n?([\s\S]*?)\n?```',  # Markdown code blocks
+        r'`([\s\S]*?)`',  # Inline code
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, content, re.DOTALL)
+        for match in matches:
+            match = match.strip()
+            if match.startswith('{') and match.endswith('}'):
+                return match
+    
+    # If content starts with ``` strip it
+    content = content.strip()
+    if content.startswith('```'):
+        # Find the end
+        lines = content.split('\n')
+        if lines[0].startswith('```'):
+            lines = lines[1:]  # Remove first line
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]  # Remove last line
+        content = '\n'.join(lines)
+    
+    # If no code blocks, return original (might be plain JSON)
+    return content.strip()
+
+
+def _safe_parse_json(content: str) -> Dict[str, Any]:
+    """
+    Safely parse JSON, handling common LLM output issues like backticks in strings.
+    """
+    # First try normal parsing
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    
+    # Try to extract just the parts we need using regex
+    remediation_match = re.search(r'"remediation"\s*:\s*"([^"]*(?:\\"[^"]*)*)"', content)
+    diff_match = re.search(r'"diff"\s*:\s*["`]([^"`]*(?:\\.[^"`]*)*)["`]', content)
+    
+    result = {}
+    if remediation_match:
+        result["remediation"] = remediation_match.group(1).replace('\\"', '"')
+    if diff_match:
+        result["diff"] = diff_match.group(1).replace('\\"', '"')
+    
+    if result:
+        return result
+    
+    # Last resort: try to clean up backticks that might be causing issues
+    # Replace backtick-quoted strings with regular quotes
+    cleaned = re.sub(r'`([^`]*)`', r'"\1"', content)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+    
+    # Give up and return empty
+    raise json.JSONDecodeError("Could not parse JSON", content, 0)
+
 
 class OllamaProvider(AIProvider):
     """Ollama provider for local LLM analysis."""
@@ -65,7 +140,9 @@ class OllamaProvider(AIProvider):
             content = response.choices[0].message.content
             usage = response.usage
             
-            analysis_data = json.loads(content)
+            # Extract JSON from potential markdown wrapping
+            clean_content = _extract_json_from_response(content)
+            analysis_data = json.loads(clean_content)
             
             # Cost is 0 for local
             self._total_tokens += usage.total_tokens
@@ -135,13 +212,18 @@ Description: {description}
 Language: {language}
 Context: {context}
 
-Provide a fix in JSON format: {{ "remediation": "...", "diff": "..." }}
+You MUST respond with a JSON object containing exactly two string fields:
+- "remediation": A string containing the explanation of how to fix this vulnerability
+- "diff": A string containing the code changes (before/after) to fix the vulnerability
+
+Example format:
+{{"remediation": "Use parameterized queries to prevent SQL injection...", "diff": "# Before:\\nquery = 'SELECT * FROM users WHERE id = ' + user_id\\n\\n# After:\\ncursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))"}}
 """
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a secure coding expert. Output valid JSON."},
+                    {"role": "system", "content": "You are a secure coding expert. Output valid JSON only with string values, no nested objects."},
                     {"role": "user", "content": prompt}
                 ],
                 response_format={"type": "json_object"}
@@ -149,7 +231,20 @@ Provide a fix in JSON format: {{ "remediation": "...", "diff": "..." }}
             content = response.choices[0].message.content
 
             try:
-                return json.loads(content)
+                # First try to extract JSON from potential markdown wrapping
+                clean_content = _extract_json_from_response(content)
+                result = json.loads(clean_content)
+                
+                # Ensure remediation and diff are strings
+                if isinstance(result.get("remediation"), dict):
+                    result["remediation"] = json.dumps(result["remediation"], indent=2)
+                if isinstance(result.get("diff"), dict):
+                    result["diff"] = json.dumps(result["diff"], indent=2)
+                    
+                return {
+                    "remediation": str(result.get("remediation", "")),
+                    "diff": str(result.get("diff", ""))
+                }
             except json.JSONDecodeError as json_err:
                 logger.error(f"JSON parsing error: {json_err}")
                 logger.error(f"Raw content (first 500 chars): {repr(content[:500])}")
@@ -299,9 +394,145 @@ Output JSON: {{ "analysis_text": "...", "vulnerability_summary": "...", "severit
 
 class DockerAIProvider(OllamaProvider):
     """
-    Docker AI provider.
-    Same as Ollama but typically runs on a specific internal host and may ignore model name.
+    Docker Model Runner provider.
+    Uses Docker Desktop's built-in Model Runner with OpenAI-compatible API at /engines/v1.
+    Note: Default context size is 4096 tokens. Large prompts will be truncated.
     """
-    def __init__(self, base_url: str = "http://host.docker.internal:11434", model: str = "docker-ai", max_tokens: int = 2000):
-        # Docker AI often runs on host.docker.internal from within containers
-        super().__init__(base_url, model, max_tokens)
+    def __init__(self, base_url: str = "http://localhost:12434", model: str = "ai/llama3.2:latest", max_tokens: int = 2000):
+        # Docker Model Runner uses /engines/v1 for OpenAI-compatible API
+        # Skip parent __init__ and configure manually
+        super(AIProvider, self).__init__()
+        self.provider_name = "docker"
+        self.model = model
+        self.max_tokens = max_tokens
+        self._total_tokens = 0
+        self._total_cost = 0.0
+        # Docker Model Runner default context is 4096, reserve tokens for response
+        self.max_context_tokens = 3500  # Leave room for response
+        
+        # Ensure base_url uses /engines/v1 for Docker Model Runner
+        base_url = base_url.rstrip('/')
+        if base_url.endswith('/v1') or base_url.endswith('/engines/v1'):
+            base_url = base_url.rsplit('/', 1)[0]  # Remove /v1 or /engines/v1
+        
+        api_base = f"{base_url}/engines/v1"
+        
+        self.client = AsyncOpenAI(
+            base_url=api_base,
+            api_key="docker"  # Dummy key, not needed for Docker Model Runner
+        )
+        logger.info(f"Initialized Docker Model Runner provider with model: {model} at {api_base}")
+    
+    def _truncate_prompt(self, text: str, max_chars: int = 12000) -> str:
+        """
+        Truncate text to fit within context limits.
+        Rough estimate: ~4 chars per token, so 12000 chars ≈ 3000 tokens.
+        """
+        if len(text) <= max_chars:
+            return text
+        
+        # Truncate and add indicator
+        truncated = text[:max_chars]
+        # Try to end at a sentence or newline
+        last_newline = truncated.rfind('\n')
+        last_period = truncated.rfind('. ')
+        
+        cut_point = max(last_newline, last_period)
+        if cut_point > max_chars * 0.7:  # Only use if we keep at least 70%
+            truncated = truncated[:cut_point + 1]
+        
+        return truncated + "\n[... content truncated for context limit ...]"
+    
+    async def generate_remediation(
+        self,
+        vuln_type: str,
+        description: str,
+        context: str,
+        language: str
+    ) -> Dict[str, str]:
+        """Generate remediation using Docker Model Runner with context-aware truncation."""
+        # Truncate context if needed (most likely culprit for large prompts)
+        truncated_context = self._truncate_prompt(context, max_chars=8000)
+        truncated_desc = self._truncate_prompt(description, max_chars=2000)
+        
+        prompt = f"""Vulnerability: {vuln_type}
+Description: {truncated_desc}
+Language: {language}
+Context: {truncated_context}
+
+Respond with JSON containing exactly two string fields:
+- "remediation": explanation of how to fix this vulnerability
+- "diff": code changes showing before/after fix
+
+Example: {{"remediation": "Use parameterized queries...", "diff": "# Before:\\nold_code\\n\\n# After:\\nnew_code"}}
+"""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a secure coding expert. Output valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=self.max_tokens,
+                response_format={"type": "json_object"}
+            )
+            content = response.choices[0].message.content
+
+            try:
+                clean_content = _extract_json_from_response(content)
+                # Use safe parsing that handles backticks and other LLM quirks
+                result = _safe_parse_json(clean_content)
+                
+                # Ensure remediation and diff are strings
+                if isinstance(result.get("remediation"), dict):
+                    result["remediation"] = json.dumps(result["remediation"], indent=2)
+                if isinstance(result.get("diff"), dict):
+                    result["diff"] = json.dumps(result["diff"], indent=2)
+                    
+                return {
+                    "remediation": str(result.get("remediation", "")),
+                    "diff": str(result.get("diff", ""))
+                }
+            except json.JSONDecodeError as json_err:
+                logger.error(f"JSON parsing error: {json_err}")
+                # Try to extract useful content even if JSON parsing failed
+                remediation = content
+                if "remediation" in content.lower():
+                    # Try to get just the remediation text
+                    match = re.search(r'"remediation"\s*:\s*["`]([^"`]+)', content)
+                    if match:
+                        remediation = match.group(1)
+                return {
+                    "remediation": remediation[:1000] if len(remediation) > 1000 else remediation,
+                    "diff": ""
+                }
+        except Exception as e:
+            error_msg = str(e)
+            if "exceed_context_size" in error_msg or "context size" in error_msg.lower():
+                logger.warning(f"Context size exceeded, retrying with smaller prompt")
+                # Try again with more aggressive truncation
+                return await self._retry_with_minimal_prompt(vuln_type, language)
+            logger.error(f"Docker Model Runner remediation failed: {e}", exc_info=True)
+            return {"remediation": f"Error: {e}", "diff": ""}
+    
+    async def _retry_with_minimal_prompt(self, vuln_type: str, language: str) -> Dict[str, str]:
+        """Retry with a minimal prompt when context is exceeded."""
+        prompt = f"""Fix for {vuln_type} vulnerability in {language}. 
+Respond with JSON: {{"remediation": "how to fix", "diff": "code changes"}}"""
+        
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1000,
+                response_format={"type": "json_object"}
+            )
+            content = response.choices[0].message.content
+            clean_content = _extract_json_from_response(content)
+            result = json.loads(clean_content)
+            return {
+                "remediation": str(result.get("remediation", "")),
+                "diff": str(result.get("diff", ""))
+            }
+        except Exception as e:
+            return {"remediation": f"Error with minimal prompt: {e}", "diff": ""}

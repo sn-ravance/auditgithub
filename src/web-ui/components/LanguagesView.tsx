@@ -139,7 +139,7 @@ export function LanguagesView({ projectId }: LanguagesViewProps) {
                     </p>
                 </div>
             </div>
-            <DataTable columns={columns} data={languages} searchKey="name" />
+            <DataTable columns={columns} data={languages} searchKey="name" tableId="languages" />
         </div>
     )
 }

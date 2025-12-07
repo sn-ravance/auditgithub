@@ -247,7 +247,7 @@ export default function RepositoriesPage() {
                     List of all monitored repositories.
                 </p>
             </div>
-            <DataTable columns={columns} data={projects} searchKey="name" />
+            <DataTable columns={columns} data={projects} searchKey="name" tableId="repositories" />
         </div>
     )
 }

@@ -240,29 +240,63 @@ def test_ollama() -> Tuple[bool, str]:
     return False, f"Ollama not running at {base_url} or localhost:11434. Start with: ollama serve"
 
 def test_docker_ollama() -> Tuple[bool, str]:
-    """Test Docker-hosted Ollama instance"""
-    base_url = os.getenv('DOCKER_BASE_URL', 'http://localhost:11434')
+    """Test Docker-hosted AI (Docker Model Runner or Ollama)"""
+    base_url = os.getenv('DOCKER_BASE_URL', 'http://localhost:12434')
     model = os.getenv('AI_MODEL', 'llama3')
     
+    # First check if it's Docker Model Runner (uses OpenAI-compatible API)
     try:
-        # Test if Ollama is running
-        response = requests.get(f"{base_url}/api/tags", timeout=5)
-        
-        if response.status_code == 200:
-            models_data = response.json()
-            models = [m['name'] for m in models_data.get('models', [])]
+        response = requests.get(f"{base_url}/", timeout=3)
+        if response.status_code == 200 and "Docker Model Runner" in response.text:
+            # It's Docker Model Runner - check for models via OpenAI API
+            models_response = requests.get(f"{base_url}/engines/v1/models", timeout=3)
+            if models_response.status_code == 200:
+                models_data = models_response.json()
+                models = [m.get('id', m.get('name', 'unknown')) for m in models_data.get('data', [])]
+                
+                if models:
+                    return True, f"Docker Model Runner at {base_url}, models: {', '.join(models[:3])}"
+                else:
+                    return False, f"Docker Model Runner at {base_url} has no models. Pull one with: docker model pull ai/llama3.2"
+    except Exception:
+        pass
+    
+    # Try Ollama API endpoints
+    test_urls = [
+        base_url,
+        'http://localhost:12434',
+        'http://localhost:11434',
+    ]
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_urls = []
+    for url in test_urls:
+        if url not in seen:
+            seen.add(url)
+            unique_urls.append(url)
+    
+    for url in unique_urls:
+        try:
+            response = requests.get(f"{url}/api/tags", timeout=3)
             
-            if models:
-                return True, f"Connected to {base_url}, Available models: {', '.join(models[:3])}"
-            else:
-                return True, f"Connected to {base_url} but no models installed. Run: ollama pull {model}"
+            if response.status_code == 200:
+                models_data = response.json()
+                models = [m['name'] for m in models_data.get('models', [])]
+                
+                if models:
+                    return True, f"Ollama at {url}, models: {', '.join(models[:3])}"
+                else:
+                    return True, f"Ollama at {url} but no models. Run: docker exec ollama ollama pull {model}"
         
-    except requests.exceptions.ConnectionError:
-        return False, f"Docker Ollama not running at {base_url}"
-    except requests.exceptions.Timeout:
-        return False, "Connection timeout"
-    except Exception as e:
-        return False, f"Error: {str(e)}"
+        except requests.exceptions.ConnectionError:
+            continue
+        except requests.exceptions.Timeout:
+            continue
+        except Exception:
+            continue
+    
+    return False, f"No Docker AI at {base_url}. For Docker Model Runner: docker model pull ai/llama3.2"
 
 def main():
     """Main test function"""

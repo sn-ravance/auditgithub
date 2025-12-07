@@ -1,5 +1,6 @@
 "use client"
 
+import * as React from "react"
 import { Table } from "@tanstack/react-table"
 import {
     ChevronLeft,
@@ -9,6 +10,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -23,6 +25,38 @@ interface DataTablePaginationProps<TData> {
 export function DataTablePagination<TData>({
     table,
 }: DataTablePaginationProps<TData>) {
+    const pageCount = table.getPageCount()
+    const currentPage = table.getState().pagination.pageIndex + 1
+    const [inputValue, setInputValue] = React.useState(String(currentPage))
+
+    // Sync input with actual page when it changes externally
+    React.useEffect(() => {
+        setInputValue(String(currentPage))
+    }, [currentPage])
+
+    const handlePageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setInputValue(e.target.value)
+    }
+
+    const handlePageInputBlur = () => {
+        const page = parseInt(inputValue, 10)
+        if (!isNaN(page) && page >= 1 && page <= pageCount) {
+            table.setPageIndex(page - 1)
+        } else {
+            setInputValue(String(currentPage))
+        }
+    }
+
+    const handlePageInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            handlePageInputBlur()
+            ;(e.target as HTMLInputElement).blur()
+        } else if (e.key === 'Escape') {
+            setInputValue(String(currentPage))
+            ;(e.target as HTMLInputElement).blur()
+        }
+    }
+
     return (
         <div className="flex items-center justify-between px-2">
             <div className="flex-1 text-sm text-muted-foreground">
@@ -53,9 +87,19 @@ export function DataTablePagination<TData>({
                         </DropdownMenuContent>
                     </DropdownMenu>
                 </div>
-                <div className="flex w-[100px] items-center justify-center text-sm font-medium">
-                    Page {table.getState().pagination.pageIndex + 1} of{" "}
-                    {table.getPageCount()}
+                <div className="flex items-center space-x-2 text-sm font-medium">
+                    <span>Page</span>
+                    <Input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={inputValue}
+                        onChange={handlePageInputChange}
+                        onBlur={handlePageInputBlur}
+                        onKeyDown={handlePageInputKeyDown}
+                        className="h-8 w-14 text-center"
+                    />
+                    <span>of {pageCount}</span>
                 </div>
                 <div className="flex items-center space-x-2">
                     <Button

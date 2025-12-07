@@ -57,8 +57,9 @@ services:
       - AI_PROVIDER=${AI_PROVIDER}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - DOCKER_BASE_URL=${DOCKER_BASE_URL}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - DOCKER_BASE_URL=http://host.docker.internal:12434
+      - DOCKER_MODEL=${DOCKER_MODEL:-ai/llama3.2:latest}
       - AZURE_AI_FOUNDRY_ENDPOINT=${AZURE_AI_FOUNDRY_ENDPOINT}
       - AZURE_AI_FOUNDRY_API_KEY=${AZURE_AI_FOUNDRY_API_KEY}
     depends_on:
@@ -99,6 +100,26 @@ services:
     ports:
       - "5432:5432"
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: auditgh_ollama
+    ports:
+      - "12434:11434"  # Map to 12434 for Docker Ollama (separate from local Ollama on 11434)
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    # Uncomment for GPU support (NVIDIA)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
 volumes:
   dependency-cache:
   semgrep-cache:
@@ -107,3 +128,4 @@ volumes:
   postgres-data:
   web-ui-node-modules:
   web-ui-next:
+  ollama-data:

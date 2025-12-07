@@ -18,6 +18,30 @@ from ..config import settings # Keep settings as it's used later
 
 logger = logging.getLogger(__name__)
 
+def _is_error_response(response: str) -> bool:
+    """Check if an AI response is an error message."""
+    if not response:
+        return True
+    
+    error_indicators = [
+        "Error:",
+        "Failed:",
+        "AI analysis failed:",
+        "API key",
+        "rate limit",
+        "connection error",
+        "timeout",
+        "HTTPException",
+        "Authentication failed"
+    ]
+    
+    response_lower = response.lower()
+    for indicator in error_indicators:
+        if indicator.lower() in response_lower:
+            return True
+    
+    return False
+
 router = APIRouter(
     prefix="/ai",
     tags=["ai"]
@@ -30,7 +54,9 @@ async def get_ai_config():
         "provider": settings.AI_PROVIDER,
         "model": settings.AI_MODEL,
         "openai_model": settings.OPENAI_MODEL,
-        "anthropic_model": settings.ANTHROPIC_MODEL
+        "anthropic_model": settings.ANTHROPIC_MODEL,
+        "docker_model": getattr(settings, 'DOCKER_MODEL', 'ai/llama3.2:latest'),
+        "docker_base_url": settings.DOCKER_BASE_URL
     }
 
 # Initialize AI Agent
@@ -48,6 +74,7 @@ try:
         model = settings.ANTHROPIC_MODEL
     elif provider == "docker":
         ollama_url = settings.DOCKER_BASE_URL
+        model = settings.DOCKER_MODEL or "ai/llama3.2:latest"
         
     ai_agent = AIAgent(
         openai_api_key=settings.OPENAI_API_KEY,
@@ -259,6 +286,29 @@ async def analyze_finding_endpoint(
             finding=finding_dict,
             user_prompt=request.prompt
         )
+        
+        # Append AI Security Analysis to finding description if successful
+        if analysis and not _is_error_response(analysis):
+            from datetime import datetime
+            timestamp = datetime.utcnow().isoformat()
+            ai_header = "### 🤖 AI Security Analysis"
+            
+            # Check if analysis is already appended to avoid duplication
+            if ai_header not in (finding.description or ""):
+                provider_name = getattr(ai_agent, 'provider_name', 'AI')
+                formatted_analysis = f"""
+
+{ai_header}
+**Analyzed:** {timestamp}
+**Provider:** {provider_name}
+
+{analysis}
+
+---
+"""
+                finding.description = f"{finding.description or ''}{formatted_analysis}"
+                db.commit()
+                logger.info(f"Appended AI Security Analysis to finding {request.finding_id}")
         
         return {"analysis": analysis}
 

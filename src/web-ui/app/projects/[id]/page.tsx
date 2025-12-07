@@ -207,19 +207,19 @@ export default function ProjectPage() {
                     />
                 </TabsContent>
                 <TabsContent value="secrets">
-                    <DataTable columns={findingColumns} data={secrets} searchKey="title" />
+                    <DataTable columns={findingColumns} data={secrets} searchKey="title" tableId="project-secrets" />
                 </TabsContent>
                 <TabsContent value="sast">
-                    <DataTable columns={findingColumns} data={sast} searchKey="title" />
+                    <DataTable columns={findingColumns} data={sast} searchKey="title" tableId="project-sast" />
                 </TabsContent>
                 <TabsContent value="infrastructure">
-                    <DataTable columns={findingColumns} data={terraform} searchKey="title" />
+                    <DataTable columns={findingColumns} data={terraform} searchKey="title" tableId="project-infrastructure" />
                 </TabsContent>
                 <TabsContent value="dependencies">
-                    <DataTable columns={findingColumns} data={oss} searchKey="title" />
+                    <DataTable columns={findingColumns} data={oss} searchKey="title" tableId="project-dependencies" />
                 </TabsContent>
                 <TabsContent value="cicd">
-                    <DataTable columns={runColumns} data={scanRuns} searchKey="status" />
+                    <DataTable columns={runColumns} data={scanRuns} searchKey="title" tableId="project-cicd" />
                 </TabsContent>
                 <TabsContent value="architecture" className="mt-6">
                     <ArchitectureView projectId={params.id as string} />

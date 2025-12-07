@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Loader2, LayoutGrid, List } from "lucide-react"
 import Link from "next/link"
-import { AskAIDialog } from "@/components/AskAIDialog"
 import { ProjectScorecard } from "@/components/project-scorecard"
 import { DataTableColumnHeader } from "@/components/data-table-column-header"
 
@@ -21,7 +20,8 @@ export default function FindingsPage() {
     useEffect(() => {
         const fetchFindings = async () => {
             try {
-                const res = await fetch(`${API_BASE}/findings/?limit=500`)
+                // Fetch all findings (limit=0 means no limit)
+                const res = await fetch(`${API_BASE}/findings/?limit=0&order_by=severity`)
                 if (res.ok) {
                     const data = await res.json()
                     setFindings(data)
@@ -76,9 +76,17 @@ export default function FindingsPage() {
             header: ({ column }) => (
                 <DataTableColumnHeader column={column} title="Repository" />
             ),
-            cell: ({ row }) => (
-                <span className="font-medium">{row.getValue("repo_name")}</span>
-            ),
+            cell: ({ row }) => {
+                const repoId = row.original.repository_id
+                const repoName = row.getValue("repo_name") as string
+                return repoId ? (
+                    <Link href={`/projects/${repoId}`} className="font-medium text-blue-600 hover:underline">
+                        {repoName}
+                    </Link>
+                ) : (
+                    <span className="font-medium">{repoName}</span>
+                )
+            },
             filterFn: (row, id, value) => {
                 return value.includes(row.getValue(id))
             },
@@ -93,8 +101,19 @@ export default function FindingsPage() {
             )
         },
         {
-            id: "actions",
-            cell: ({ row }) => <AskAIDialog findingId={row.original.id} />
+            accessorKey: "repo_last_commit_at",
+            header: ({ column }) => (
+                <DataTableColumnHeader column={column} title="Last Commit" />
+            ),
+            cell: ({ row }) => {
+                const date = row.getValue("repo_last_commit_at") as string | null
+                if (!date) return <span className="text-muted-foreground">—</span>
+                return (
+                    <span className="text-sm text-muted-foreground">
+                        {new Date(date).toLocaleDateString()}
+                    </span>
+                )
+            }
         }
     ]
 
@@ -138,7 +157,7 @@ export default function FindingsPage() {
             </div>
 
             {viewMode === "table" ? (
-                <DataTable columns={columns} data={findings} searchKey="title" />
+                <DataTable columns={columns} data={findings} searchKey="title" tableId="findings" />
             ) : (
                 <ProjectScorecard />
             )}

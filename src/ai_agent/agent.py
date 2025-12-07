@@ -62,8 +62,12 @@ class AIAgent:
                 ollama_base_url = "http://ollama:11434"
             self.provider = OllamaProvider(base_url=ollama_base_url, model=model)
         elif provider == "docker":
-            base_url = ollama_base_url or "http://host.docker.internal:11434"
-            self.provider = DockerAIProvider(base_url=base_url)
+            # Docker Model Runner at localhost:12434 or DOCKER_BASE_URL
+            import os
+            base_url = os.getenv('DOCKER_BASE_URL', 'http://localhost:12434')
+            # Default to ai/llama3.2:latest if no model specified
+            docker_model = model if model and model != "gpt-4" else "ai/llama3.2:latest"
+            self.provider = DockerAIProvider(base_url=base_url, model=docker_model)
         elif provider == "anthropic_foundry":
             if not azure_foundry_endpoint or not azure_foundry_api_key:
                 raise ValueError("Endpoint and API Key required for anthropic_foundry provider")
