@@ -21,7 +21,21 @@ import {
   CheckCircle2,
   MessageSquare,
   RefreshCw,
+  Pencil,
+  Trash2,
+  X,
+  Check,
 } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -55,6 +69,13 @@ export function JournalModal({ findingId, isOpen, onClose, onStatusChange }: Jou
   const [isAskingAI, setIsAskingAI] = useState(false)
   const [showAiInput, setShowAiInput] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Edit/Delete state
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null)
+  const [editingText, setEditingText] = useState("")
+  const [isUpdating, setIsUpdating] = useState(false)
+  const [deleteEntryId, setDeleteEntryId] = useState<string | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // Fetch investigation data
   const fetchData = async () => {
@@ -157,6 +178,70 @@ export function JournalModal({ findingId, isOpen, onClose, onStatusChange }: Jou
     } finally {
       setIsAskingAI(false)
     }
+  }
+
+  // Start editing an entry
+  const handleStartEdit = (entry: JournalEntry) => {
+    setEditingEntryId(entry.id)
+    setEditingText(entry.entry_text)
+  }
+
+  // Cancel editing
+  const handleCancelEdit = () => {
+    setEditingEntryId(null)
+    setEditingText("")
+  }
+
+  // Save edited entry
+  const handleSaveEdit = async () => {
+    if (!editingEntryId || !editingText.trim()) return
+    setIsUpdating(true)
+    try {
+      const res = await fetch(`${API_BASE}/findings/${findingId}/journal/${editingEntryId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entry_text: editingText,
+        }),
+      })
+      if (res.ok) {
+        setEditingEntryId(null)
+        setEditingText("")
+        fetchData()
+      }
+    } catch (error) {
+      console.error("Failed to update journal entry:", error)
+    } finally {
+      setIsUpdating(false)
+    }
+  }
+
+  // Delete an entry
+  const handleDeleteEntry = async () => {
+    if (!deleteEntryId) return
+    setIsDeleting(true)
+    try {
+      const res = await fetch(`${API_BASE}/findings/${findingId}/journal/${deleteEntryId}`, {
+        method: "DELETE",
+      })
+      if (res.ok) {
+        setDeleteEntryId(null)
+        fetchData()
+      }
+    } catch (error) {
+      console.error("Failed to delete journal entry:", error)
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  // Check if an entry can be edited/deleted (only analyst notes, not system or AI)
+  const canModifyEntry = (entry: JournalEntry) => {
+    // Cannot modify AI-generated entries
+    if (entry.is_ai_generated) return false
+    // Cannot modify system-generated status changes
+    if (entry.entry_type === "status_change" && entry.author_name === "System") return false
+    return true
   }
 
   const getStatusIcon = (status: string | null) => {
@@ -280,7 +365,7 @@ export function JournalModal({ findingId, isOpen, onClose, onStatusChange }: Jou
                 {[...entries].reverse().map((entry) => (
                   <div
                     key={entry.id}
-                    className={`p-3 rounded-lg border ${
+                    className={`p-3 rounded-lg border group ${
                       entry.is_ai_generated
                         ? "bg-gradient-to-br from-purple-50 to-blue-50 dark:from-purple-950/20 dark:to-blue-950/20 border-purple-200 dark:border-purple-800"
                         : entry.entry_type === "status_change"
@@ -291,9 +376,32 @@ export function JournalModal({ findingId, isOpen, onClose, onStatusChange }: Jou
                     <div className="flex items-center gap-2 mb-2">
                       {getEntryTypeIcon(entry)}
                       <span className="text-sm font-medium">{entry.author_name}</span>
-                      <span className="text-xs text-muted-foreground ml-auto">
+                      <span className="text-xs text-muted-foreground ml-auto mr-2">
                         {formatDate(entry.created_at)}
                       </span>
+                      {/* Edit/Delete buttons - only show for modifiable entries */}
+                      {canModifyEntry(entry) && editingEntryId !== entry.id && (
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => handleStartEdit(entry)}
+                            title="Edit entry"
+                          >
+                            <Pencil className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => setDeleteEntryId(entry.id)}
+                            title="Delete entry"
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
                     {entry.is_ai_generated && entry.ai_prompt && (
                       <div className="mb-2 p-2 bg-white/50 dark:bg-black/20 rounded text-sm">
@@ -301,11 +409,49 @@ export function JournalModal({ findingId, isOpen, onClose, onStatusChange }: Jou
                         {entry.ai_prompt}
                       </div>
                     )}
-                    <div className="prose prose-sm dark:prose-invert max-w-none">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {entry.entry_text}
-                      </ReactMarkdown>
-                    </div>
+                    {/* Edit mode */}
+                    {editingEntryId === entry.id ? (
+                      <div className="space-y-2">
+                        <Textarea
+                          value={editingText}
+                          onChange={(e) => setEditingText(e.target.value)}
+                          className="min-h-[100px] resize-none"
+                          autoFocus
+                        />
+                        <div className="flex items-center gap-2 justify-end">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={handleCancelEdit}
+                            disabled={isUpdating}
+                            title="Cancel"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-green-600 hover:text-green-700 hover:bg-green-50"
+                            onClick={handleSaveEdit}
+                            disabled={!editingText.trim() || isUpdating}
+                            title="Save changes"
+                          >
+                            {isUpdating ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Check className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {entry.entry_text}
+                        </ReactMarkdown>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -387,6 +533,33 @@ export function JournalModal({ findingId, isOpen, onClose, onStatusChange }: Jou
           </div>
         </div>
       </DialogContent>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!deleteEntryId} onOpenChange={(open) => !open && setDeleteEntryId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Journal Entry</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this journal entry? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteEntry}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <Trash2 className="h-4 w-4 mr-2" />
+              )}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   )
 }

@@ -872,6 +872,7 @@ from ..database import get_db
 from .. import models
 from sqlalchemy.orm import Session
 from ..utils.repo_context import get_repo_context, clone_repo_to_temp, cleanup_repo
+from ..utils.architecture_preprocessor import ArchitecturePreprocessor, build_diagram_prompt_from_preprocessed
 import uuid
 
 import re
@@ -1363,3 +1364,279 @@ async def restore_architecture_version(project_id: str, version_id: str, db: Ses
     db.commit()
     
     return {"status": "success", "message": f"Restored version {version.version_number}"}
+
+
+# Architecture Preprocessing Endpoint
+
+class PreprocessRequest(BaseModel):
+    project_id: str
+    force_refresh: bool = False  # If True, re-preprocess even if cached
+
+class PreprocessedArchitectureResponse(BaseModel):
+    project_name: str
+    project_type: str
+    cloud_provider: Optional[str] = None
+    components: List[Dict[str, Any]]
+    api_summary: Dict[str, Any]
+    data_layer: Dict[str, Any]
+    external_integrations: List[Dict[str, str]]
+    tech_stack: Dict[str, List[str]]
+    confidence_notes: List[str]
+    cached: bool = False
+
+@router.post("/architecture/preprocess", response_model=PreprocessedArchitectureResponse)
+async def preprocess_architecture(
+    request: PreprocessRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Preprocess a repository to extract architecture information.
+
+    This endpoint:
+    1. Clones the repository
+    2. Runs deterministic code extractors (routes, models, services, imports)
+    3. Uses AI to summarize each domain (services, API, data layer, tech stack)
+    4. Returns structured JSON for accurate diagram generation
+
+    The preprocessed data is cached in the database for future use.
+    """
+    if not ai_agent:
+        raise HTTPException(status_code=503, detail="AI Agent not initialized")
+
+    # Get project
+    try:
+        p_uuid = uuid.UUID(request.project_id)
+        project = db.query(models.Repository).filter(models.Repository.id == p_uuid).first()
+    except ValueError:
+        project = db.query(models.Repository).filter(models.Repository.name == request.project_id).first()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not project.url:
+        raise HTTPException(status_code=400, detail="Project repository URL is missing")
+
+    # Check for cached preprocessed data (if not force_refresh)
+    if not request.force_refresh and project.architecture_preprocessed:
+        try:
+            cached_data = json.loads(project.architecture_preprocessed)
+            return PreprocessedArchitectureResponse(
+                **cached_data,
+                cached=True
+            )
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Failed to parse cached preprocessed data for project {project.id}")
+
+    repo_path = None
+    try:
+        # Clone repo
+        token = settings.GITHUB_TOKEN
+        repo_path = clone_repo_to_temp(project.url, token)
+
+        # Create preprocessor and run
+        preprocessor = ArchitecturePreprocessor(ai_agent.provider)
+        architecture = await preprocessor.preprocess(repo_path, project.name)
+
+        # Convert to response format
+        response_data = {
+            "project_name": architecture.project_name,
+            "project_type": architecture.project_type,
+            "cloud_provider": architecture.cloud_provider,
+            "components": [
+                {
+                    "name": c.name,
+                    "type": c.type,
+                    "technology": c.technology,
+                    "port": c.port,
+                    "description": c.description,
+                    "connections": c.connects_to
+                }
+                for c in architecture.components
+            ],
+            "api_summary": architecture.api_summary,
+            "data_layer": architecture.data_layer,
+            "external_integrations": architecture.external_integrations,
+            "tech_stack": architecture.tech_stack,
+            "confidence_notes": architecture.confidence_notes
+        }
+
+        # Cache the preprocessed data
+        project.architecture_preprocessed = json.dumps(response_data)
+        db.commit()
+
+        return PreprocessedArchitectureResponse(
+            **response_data,
+            cached=False
+        )
+
+    except Exception as e:
+        logger.error(f"Error preprocessing architecture: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if repo_path:
+            cleanup_repo(repo_path)
+
+
+@router.post("/architecture/generate-from-preprocessed", response_model=ArchitectureResponse)
+async def generate_architecture_from_preprocessed(
+    request: ArchitectureRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate architecture diagram using preprocessed data.
+
+    This endpoint uses cached preprocessed architecture data to generate
+    a more accurate diagram without re-analyzing the entire codebase.
+    """
+    if not ai_agent:
+        raise HTTPException(status_code=503, detail="AI Agent not initialized")
+
+    # Get project
+    try:
+        p_uuid = uuid.UUID(request.project_id)
+        project = db.query(models.Repository).filter(models.Repository.id == p_uuid).first()
+    except ValueError:
+        project = db.query(models.Repository).filter(models.Repository.name == request.project_id).first()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Check for preprocessed data
+    if not project.architecture_preprocessed:
+        raise HTTPException(
+            status_code=400,
+            detail="No preprocessed data found. Run /ai/architecture/preprocess first."
+        )
+
+    try:
+        # Parse preprocessed data
+        preprocessed_data = json.loads(project.architecture_preprocessed)
+
+        # Reconstruct the PreprocessedArchitecture object
+        from ..utils.architecture_preprocessor import PreprocessedArchitecture, ArchitectureComponent
+
+        components = [
+            ArchitectureComponent(
+                name=c.get("name", "unknown"),
+                type=c.get("type", "service"),
+                technology=c.get("technology"),
+                port=c.get("port"),
+                description=c.get("description", ""),
+                connects_to=c.get("connections", [])
+            ) for c in preprocessed_data.get("components", [])
+        ]
+
+        architecture = PreprocessedArchitecture(
+            project_name=preprocessed_data["project_name"],
+            project_type=preprocessed_data["project_type"],
+            cloud_provider=preprocessed_data.get("cloud_provider"),
+            components=components,
+            api_summary=preprocessed_data.get("api_summary", {}),
+            data_layer=preprocessed_data.get("data_layer", {}),
+            external_integrations=preprocessed_data.get("external_integrations", []),
+            tech_stack=preprocessed_data.get("tech_stack", {}),
+            confidence_notes=preprocessed_data.get("confidence_notes", [])
+        )
+
+        # Build focused diagram prompt
+        diagram_prompt = build_diagram_prompt_from_preprocessed(architecture)
+
+        # Add the diagrams index for icon reference
+        prompt_with_icons = f"""{diagram_prompt}
+
+## Available Diagram Icons Reference
+Use ONLY these valid imports. Here are common icons by cloud provider:
+
+### AWS (from diagrams.aws.*)
+- compute: EC2, Lambda, ECS, EKS, Fargate
+- database: RDS, Aurora, DynamoDB, ElastiCache, Redshift
+- network: ELB, ALB, NLB, CloudFront, Route53, VPC, APIGateway
+- storage: S3, EBS, EFS
+- integration: SQS, SNS, EventBridge
+- security: IAM, Cognito, KMS
+
+### GCP (from diagrams.gcp.*)
+- compute: ComputeEngine, Functions, Run, GKE
+- database: SQL, Spanner, Firestore, Memorystore, BigQuery
+- network: LoadBalancing, CDN, DNS
+- storage: Storage
+
+### Azure (from diagrams.azure.*)
+- compute: VirtualMachines, FunctionApps, ContainerInstances, KubernetesServices
+- database: SQLDatabases, CosmosDb, CacheForRedis
+- network: LoadBalancers, CDNProfiles, DNS, ApplicationGateway
+- storage: BlobStorage
+
+### Generic (from diagrams.generic.*)
+- compute: Rack
+- database: SQL
+- network: Firewall, Router, Switch
+- storage: Storage
+
+### On-Premise (from diagrams.onprem.*)
+- compute: Server
+- database: PostgreSQL, MySQL, MongoDB, Redis, Cassandra, Elasticsearch
+- queue: Kafka, RabbitMQ, Celery
+- network: Nginx, Apache, Traefik
+- container: Docker, Kubernetes
+- ci: Jenkins, GitlabCI, GithubActions
+- client: Client, User
+- monitoring: Prometheus, Grafana, Datadog
+
+IMPORTANT: Only use icons that exist in the diagrams library. When in doubt, use generic icons."""
+
+        # Generate diagram code using AI
+        if hasattr(ai_agent.provider, 'execute_prompt'):
+            response = await ai_agent.provider.execute_prompt(prompt_with_icons)
+        else:
+            raise HTTPException(status_code=500, detail="AI provider does not support prompt execution")
+
+        # Parse the response
+        diagram_code = None
+        report = response
+        image_b64 = None
+
+        code_match = re.search(r"```python\n(.*?)```", response, re.DOTALL)
+        if code_match:
+            diagram_code = code_match.group(1).strip()
+            report = response.replace(code_match.group(0), "").strip()
+
+            # Try to generate image
+            try:
+                image_b64 = execute_diagram_code(diagram_code)
+            except Exception as e:
+                logger.warning(f"Diagram generation failed: {e}. Attempting auto-fix...")
+                try:
+                    if hasattr(ai_agent.provider, 'fix_and_enhance_diagram_code'):
+                        fixed_code = await ai_agent.provider.fix_and_enhance_diagram_code(
+                            diagram_code, str(e), diagrams_index
+                        )
+
+                        code_match_fix = re.search(r"```python\n(.*?)```", fixed_code, re.DOTALL)
+                        if code_match_fix:
+                            fixed_code = code_match_fix.group(1).strip()
+                        else:
+                            fixed_code = fixed_code.replace("```python", "").replace("```", "").strip()
+
+                        diagram_code = fixed_code
+                        image_b64 = execute_diagram_code(diagram_code)
+                        logger.info("Auto-fix successful for preprocessed diagram")
+                except Exception as fix_error:
+                    logger.error(f"Auto-fix failed: {fix_error}")
+
+        # Save to project
+        project.architecture_report = report
+        project.architecture_diagram = diagram_code
+        db.commit()
+
+        return ArchitectureResponse(
+            report=report,
+            diagram=diagram_code,
+            image=image_b64
+        )
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Failed to parse preprocessed data")
+    except Exception as e:
+        logger.error(f"Error generating from preprocessed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

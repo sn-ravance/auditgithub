@@ -785,6 +785,12 @@ class AskJournalAIRequest(BaseModel):
     question: str
     author_name: Optional[str] = 'Analyst'
 
+class JournalEntryUpdateRequest(BaseModel):
+    """Request to update a journal entry."""
+    entry_text: Optional[str] = None
+    entry_type: Optional[str] = None  # 'note', 'status_change', 'ai_response', 'communication'
+    author_name: Optional[str] = None
+
 
 @router.get("/{finding_id}/investigation", response_model=InvestigationStatusResponse)
 def get_investigation_status(finding_id: str, db: Session = Depends(get_db)):
@@ -1026,3 +1032,149 @@ Please provide helpful, actionable advice for the analyst's question. Be concise
         ai_prompt=ai_entry.ai_prompt,
         created_at=ai_entry.created_at
     )
+
+
+@router.get("/{finding_id}/journal/{entry_id}", response_model=JournalEntryResponse)
+def get_journal_entry(finding_id: str, entry_id: str, db: Session = Depends(get_db)):
+    """Get a specific journal entry for a finding."""
+    try:
+        finding_uuid = uuid.UUID(finding_id)
+        entry_uuid = uuid.UUID(entry_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    # Find the finding
+    finding = db.query(models.Finding).filter(models.Finding.finding_uuid == finding_uuid).first()
+    if not finding:
+        finding = db.query(models.Finding).filter(models.Finding.id == finding_uuid).first()
+
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    # Find the journal entry
+    journal_entry = db.query(models.JournalEntry).filter(
+        models.JournalEntry.id == entry_uuid,
+        models.JournalEntry.finding_id == finding.id
+    ).first()
+
+    if not journal_entry:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+
+    return JournalEntryResponse(
+        id=str(journal_entry.id),
+        entry_text=journal_entry.entry_text,
+        entry_type=journal_entry.entry_type or 'note',
+        author_name=journal_entry.author_name or 'Analyst',
+        is_ai_generated=journal_entry.is_ai_generated or False,
+        ai_prompt=journal_entry.ai_prompt,
+        created_at=journal_entry.created_at
+    )
+
+
+@router.put("/{finding_id}/journal/{entry_id}", response_model=JournalEntryResponse)
+def update_journal_entry(
+    finding_id: str,
+    entry_id: str,
+    update: JournalEntryUpdateRequest,
+    db: Session = Depends(get_db)
+):
+    """Update a journal entry for a finding."""
+    try:
+        finding_uuid = uuid.UUID(finding_id)
+        entry_uuid = uuid.UUID(entry_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    # Find the finding
+    finding = db.query(models.Finding).filter(models.Finding.finding_uuid == finding_uuid).first()
+    if not finding:
+        finding = db.query(models.Finding).filter(models.Finding.id == finding_uuid).first()
+
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    # Find the journal entry
+    journal_entry = db.query(models.JournalEntry).filter(
+        models.JournalEntry.id == entry_uuid,
+        models.JournalEntry.finding_id == finding.id
+    ).first()
+
+    if not journal_entry:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+
+    # Prevent editing system-generated status change entries
+    if journal_entry.entry_type == 'status_change' and journal_entry.author_name == 'System':
+        raise HTTPException(
+            status_code=403,
+            detail="System-generated status change entries cannot be modified"
+        )
+
+    # Update fields if provided
+    if update.entry_text is not None:
+        journal_entry.entry_text = update.entry_text
+    if update.entry_type is not None:
+        valid_types = ['note', 'status_change', 'ai_response', 'communication']
+        if update.entry_type not in valid_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid entry_type. Must be one of: {', '.join(valid_types)}"
+            )
+        journal_entry.entry_type = update.entry_type
+    if update.author_name is not None:
+        journal_entry.author_name = update.author_name
+
+    db.commit()
+    db.refresh(journal_entry)
+
+    return JournalEntryResponse(
+        id=str(journal_entry.id),
+        entry_text=journal_entry.entry_text,
+        entry_type=journal_entry.entry_type or 'note',
+        author_name=journal_entry.author_name or 'Analyst',
+        is_ai_generated=journal_entry.is_ai_generated or False,
+        ai_prompt=journal_entry.ai_prompt,
+        created_at=journal_entry.created_at
+    )
+
+
+@router.delete("/{finding_id}/journal/{entry_id}")
+def delete_journal_entry(finding_id: str, entry_id: str, db: Session = Depends(get_db)):
+    """Delete a journal entry for a finding."""
+    try:
+        finding_uuid = uuid.UUID(finding_id)
+        entry_uuid = uuid.UUID(entry_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    # Find the finding
+    finding = db.query(models.Finding).filter(models.Finding.finding_uuid == finding_uuid).first()
+    if not finding:
+        finding = db.query(models.Finding).filter(models.Finding.id == finding_uuid).first()
+
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    # Find the journal entry
+    journal_entry = db.query(models.JournalEntry).filter(
+        models.JournalEntry.id == entry_uuid,
+        models.JournalEntry.finding_id == finding.id
+    ).first()
+
+    if not journal_entry:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+
+    # Prevent deleting system-generated status change entries
+    if journal_entry.entry_type == 'status_change' and journal_entry.author_name == 'System':
+        raise HTTPException(
+            status_code=403,
+            detail="System-generated status change entries cannot be deleted"
+        )
+
+    db.delete(journal_entry)
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "Journal entry deleted",
+        "deleted_id": entry_id
+    }

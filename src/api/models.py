@@ -47,7 +47,8 @@ class Repository(Base):
 
     # Architecture
     architecture_report = Column(Text)
-    architecture_diagram = Column(Text) # XML string for Draw.io
+    architecture_diagram = Column(Text) # Python code for diagrams library
+    architecture_preprocessed = Column(Text)  # JSON string with preprocessed architecture data
     
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
