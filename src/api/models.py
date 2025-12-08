@@ -149,6 +149,13 @@ class Finding(Base):
     ai_remediation_diff = Column(Text)
     ai_confidence_score = Column(Numeric(3, 2))
     
+    # For secrets: whether the secret was verified as active/valid by TruffleHog
+    is_verified_by_scanner = Column(Boolean, default=False)
+    # For secrets: whether we independently validated the token is live/active
+    is_validated_active = Column(Boolean, default=None, nullable=True)
+    validation_message = Column(String, nullable=True)
+    validated_at = Column(DateTime, nullable=True)
+    
     first_seen_at = Column(DateTime, server_default=func.now())
     last_seen_at = Column(DateTime, server_default=func.now())
     resolved_at = Column(DateTime)

@@ -3,9 +3,11 @@ import os
 import json
 import sys
 import logging
+import requests
 from pathlib import Path
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
+from typing import Tuple, Optional
 
 # Add src to path to import models
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -19,6 +21,109 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# -------------------- Token Validation Functions --------------------
+
+def validate_github_token(token: str) -> Tuple[bool, str]:
+    """
+    Validate a GitHub token by making a test API call.
+    Returns: (is_valid, message)
+    """
+    try:
+        response = requests.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json"
+            },
+            timeout=5
+        )
+        if response.status_code == 200:
+            user = response.json().get("login", "unknown")
+            return True, f"Active token for GitHub user: {user}"
+        elif response.status_code == 401:
+            return False, "Invalid/expired token"
+        else:
+            return False, f"Unknown status: {response.status_code}"
+    except Exception as e:
+        return None, f"Validation error: {str(e)}"
+
+
+def validate_aws_key(access_key: str, secret_key: str = None) -> Tuple[bool, str]:
+    """
+    Validate an AWS access key. Full validation requires secret key.
+    Returns: (is_valid, message)
+    """
+    # AWS key format validation
+    if not access_key.startswith(('AKIA', 'ABIA', 'ACCA', 'AGPA', 'AIDA', 'AIPA', 'ANPA', 'ANVA', 'AROA', 'APKA', 'ASCA', 'ASIA')):
+        return False, "Invalid AWS key format"
+    
+    if len(access_key) != 20:
+        return False, "Invalid AWS key length"
+    
+    # Without secret key, we can only do format validation
+    if not secret_key:
+        return None, "Format valid, cannot verify without secret key"
+    
+    # With secret key, we could make an AWS STS call to validate
+    # For safety, we don't do this automatically as it could trigger alerts
+    return None, "AWS key format valid, active validation skipped for safety"
+
+
+def validate_jwt_token(token: str) -> Tuple[bool, str]:
+    """
+    Basic JWT token validation (structure only, not signature).
+    Returns: (is_valid, message)
+    """
+    import base64
+    
+    parts = token.split('.')
+    if len(parts) != 3:
+        return False, "Invalid JWT structure"
+    
+    try:
+        # Decode header and payload (add padding)
+        header_b64 = parts[0] + '=' * (4 - len(parts[0]) % 4)
+        payload_b64 = parts[1] + '=' * (4 - len(parts[1]) % 4)
+        
+        header = json.loads(base64.urlsafe_b64decode(header_b64))
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        
+        # Check expiration
+        exp = payload.get('exp')
+        if exp:
+            from datetime import datetime
+            if datetime.utcnow().timestamp() > exp:
+                return False, f"JWT expired at {datetime.utcfromtimestamp(exp).isoformat()}"
+            else:
+                return None, f"JWT not expired (exp: {datetime.utcfromtimestamp(exp).isoformat()}), signature not verified"
+        
+        return None, "JWT structure valid, no expiration set, signature not verified"
+    except Exception as e:
+        return False, f"JWT decode error: {str(e)}"
+
+
+def validate_secret(detector_name: str, raw_secret: str) -> Tuple[Optional[bool], str]:
+    """
+    Validate a secret based on its detector type.
+    Returns: (is_valid, message)
+        - is_valid: True (active), False (invalid/expired), None (couldn't determine)
+    """
+    detector_lower = detector_name.lower()
+    
+    if 'github' in detector_lower:
+        return validate_github_token(raw_secret)
+    elif 'jwt' in detector_lower:
+        return validate_jwt_token(raw_secret)
+    elif 'aws' in detector_lower:
+        return validate_aws_key(raw_secret)
+    else:
+        # For other secret types, we can't validate automatically
+        return None, f"No automatic validation available for {detector_name}"
+
+
+# -------------------- Database Functions --------------------
 
 def get_db():
     db = SessionLocal()
@@ -56,19 +161,61 @@ def ingest_trufflehog(db: Session, repo: models.Repository, scan_run: models.Sca
             except ValueError:
                 pass
 
+        # Get TruffleHog's verification status
+        is_verified_by_scanner = f.get('Verified', False)
+        detector_name = f.get('DetectorName', 'Unknown')
+        raw_secret = f.get('Raw', '')
+        
+        # Perform our own validation for supported secret types
+        is_validated_active = None
+        validation_message = None
+        validated_at = None
+        
+        if raw_secret:
+            try:
+                is_validated_active, validation_message = validate_secret(detector_name, raw_secret)
+                validated_at = datetime.now(timezone.utc)
+                logger.info(f"Validated {detector_name} secret: {validation_message}")
+            except Exception as e:
+                validation_message = f"Validation error: {str(e)}"
+                logger.warning(f"Failed to validate {detector_name} secret: {e}")
+        
+        # Determine severity based on verification and validation status
+        # Priority: our validation > TruffleHog verification
+        if is_validated_active is True:
+            severity = 'critical'  # Confirmed active - highest priority
+        elif is_validated_active is False:
+            severity = 'low'  # Confirmed invalid/expired - lowest priority
+        elif is_verified_by_scanner:
+            severity = 'critical'  # TruffleHog says verified
+        else:
+            severity = 'medium'  # Unverified, couldn't validate
+        
+        # Build description with validation details
+        description_parts = [
+            f"Detector: {f.get('DetectorDescription', 'N/A')}",
+            f"Scanner Verified: {is_verified_by_scanner}"
+        ]
+        if validation_message:
+            description_parts.append(f"Validation: {validation_message}")
+        
         finding = models.Finding(
             repository_id=repo.id,
             scan_run_id=scan_run.id,
             scanner_name='trufflehog',
             finding_type='secret',
-            severity='critical', # Secrets are usually critical
-            title=f"Secret found: {f.get('DetectorName', 'Unknown')}",
-            description=f"Detector: {f.get('DetectorDescription', 'N/A')}",
+            severity=severity,
+            title=f"Secret found: {detector_name}",
+            description=". ".join(description_parts),
             file_path=file_path,
             line_start=line,
             line_end=line,
-            code_snippet=f.get('Raw', '')[:200], # Truncate for safety
-            status='open'
+            code_snippet=raw_secret[:200] if raw_secret else '',  # Truncate for safety
+            status='open',
+            is_verified_by_scanner=is_verified_by_scanner,
+            is_validated_active=is_validated_active,
+            validation_message=validation_message,
+            validated_at=validated_at
         )
         db.add(finding)
         count += 1

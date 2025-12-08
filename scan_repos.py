@@ -197,6 +197,49 @@ def make_session():
     
     return session
 
+
+def validate_github_token(token: str) -> tuple[bool, str, list[str]]:
+    """
+    Validate a GitHub token by making a test API call.
+    
+    Returns:
+        tuple: (is_valid, username_or_error, scopes)
+            - is_valid: True if token is valid
+            - username_or_error: GitHub username if valid, error message if not
+            - scopes: List of OAuth scopes the token has
+    """
+    try:
+        response = requests.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28"
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            user_data = response.json()
+            username = user_data.get("login", "unknown")
+            scopes = response.headers.get("X-OAuth-Scopes", "").split(", ")
+            scopes = [s.strip() for s in scopes if s.strip()]
+            return True, username, scopes
+        elif response.status_code == 401:
+            return False, "Bad credentials - token is invalid or expired", []
+        elif response.status_code == 403:
+            # Check for rate limiting vs permission issues
+            if "rate limit" in response.text.lower():
+                return False, "Rate limit exceeded", []
+            return False, "Access forbidden - token may lack required permissions", []
+        else:
+            return False, f"Unexpected response: {response.status_code}", []
+    except requests.exceptions.Timeout:
+        return False, "Connection timeout while validating token", []
+    except requests.exceptions.RequestException as e:
+        return False, f"Network error: {str(e)}", []
+
+
 # -------------------- Helper Functions --------------------
 
 def get_rate_limit_headers(response: requests.Response) -> dict:
@@ -4953,6 +4996,22 @@ def main():
         logging.error("GitHub token is required. Set GITHUB_TOKEN environment variable or use --token")
         print("[auditgh] ERROR: Missing GitHub token. Set GITHUB_TOKEN or pass --token.")
         sys.exit(1)
+
+    # Validate the GitHub token
+    print("[auditgh] Validating GitHub token...")
+    is_valid, result, scopes = validate_github_token(config.GITHUB_TOKEN)
+    if not is_valid:
+        logging.error(f"GitHub token validation failed: {result}")
+        print(f"[auditgh] ERROR: Invalid GitHub token - {result}")
+        print("[auditgh] Please generate a new token at: https://github.com/settings/tokens")
+        sys.exit(1)
+    
+    logging.info(f"GitHub token validated for user: {result}")
+    if scopes:
+        logging.info(f"Token scopes: {', '.join(scopes)}")
+    else:
+        logging.warning("No OAuth scopes found - token may be a fine-grained PAT or have limited permissions")
+    print(f"[auditgh] Token validated for GitHub user: {result}")
 
     # Ensure report directory exists
     os.makedirs(config.REPORT_DIR, exist_ok=True)

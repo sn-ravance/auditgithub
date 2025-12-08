@@ -81,8 +81,11 @@ export default function FindingDetailsPage() {
                     <ExceptionDialog finding={finding} onDeleted={() => router.push("/findings")} />
                     <Badge
                         className={
-                            finding.severity === "Critical" ? "bg-red-500" :
-                            finding.severity === "High" ? "bg-orange-500" : "bg-blue-500"
+                            finding.severity?.toLowerCase() === "critical" ? "bg-red-600 hover:bg-red-700 text-white" :
+                            finding.severity?.toLowerCase() === "high" ? "bg-orange-500 hover:bg-orange-600 text-white" :
+                            finding.severity?.toLowerCase() === "medium" ? "bg-yellow-500 hover:bg-yellow-600 text-black" :
+                            finding.severity?.toLowerCase() === "low" ? "bg-green-500 hover:bg-green-600 text-white" :
+                            "bg-gray-400 hover:bg-gray-500 text-white"
                         }
                     >
                         {finding.severity}

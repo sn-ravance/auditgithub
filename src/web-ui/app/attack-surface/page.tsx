@@ -75,7 +75,7 @@ interface SecretsData {
   total_hardcoded_assets: number
   secrets_by_type: SecretsByType
   secrets_by_severity: Record<string, number>
-  secrets_by_repo: Array<{ repo: string; count: number }>
+  secrets_by_repo: Array<{ repo: string; id: string | null; count: number }>
   recent_secrets: any[]
 }
 
@@ -857,7 +857,7 @@ export default function AttackSurfacePage() {
                           {i + 1}
                         </span>
                         <Link
-                          href={`/repositories`}
+                          href={repo.id ? `/projects/${repo.id}` : `/repositories`}
                           className="text-sm font-medium hover:underline truncate max-w-[200px]"
                         >
                           {repo.repo}
@@ -1029,7 +1029,7 @@ export default function AttackSurfacePage() {
                       </TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm" asChild>
-                          <Link href={`/repositories`}>
+                          <Link href={repo.id ? `/projects/${repo.id}` : `/repositories`}>
                             View <ChevronRight className="h-4 w-4 ml-1" />
                           </Link>
                         </Button>
