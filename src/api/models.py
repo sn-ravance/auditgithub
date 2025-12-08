@@ -156,6 +156,11 @@ class Finding(Base):
     validation_message = Column(String, nullable=True)
     validated_at = Column(DateTime, nullable=True)
     
+    # Investigation/Incident Response tracking
+    investigation_status = Column(String, nullable=True)  # null, 'triage', 'incident_response', 'resolved'
+    investigation_started_at = Column(DateTime, nullable=True)
+    investigation_resolved_at = Column(DateTime, nullable=True)
+    
     first_seen_at = Column(DateTime, server_default=func.now())
     last_seen_at = Column(DateTime, server_default=func.now())
     resolved_at = Column(DateTime)
@@ -168,6 +173,7 @@ class Finding(Base):
     history = relationship("FindingHistory", back_populates="finding")
     comments = relationship("FindingComment", back_populates="finding")
     remediations = relationship("Remediation", back_populates="finding")
+    journal_entries = relationship("JournalEntry", back_populates="finding", order_by="desc(JournalEntry.created_at)")
 
 class Remediation(Base):
     __tablename__ = "remediations"
@@ -230,6 +236,34 @@ class FindingComment(Base):
     updated_at = Column(DateTime, server_default=func.now())
 
     finding = relationship("Finding", back_populates="comments")
+
+
+class JournalEntry(Base):
+    """Investigation journal entries for tracking analyst notes and communications."""
+    __tablename__ = "journal_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    finding_id = Column(UUID(as_uuid=True), ForeignKey("findings.id"), nullable=False)
+    
+    # Entry content
+    entry_text = Column(Text, nullable=False)
+    entry_type = Column(String, default='note')  # 'note', 'status_change', 'ai_response', 'communication'
+    
+    # Author tracking (optional - for future user auth)
+    author_name = Column(String, default='Analyst')
+    author_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    
+    # AI interaction tracking
+    is_ai_generated = Column(Boolean, default=False)
+    ai_prompt = Column(Text, nullable=True)  # The question asked to AI
+    
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now())
+    
+    # Relationships
+    finding = relationship("Finding", back_populates="journal_entries")
+    author = relationship("User")
+
 
 class SystemConfig(Base):
     __tablename__ = "system_config"

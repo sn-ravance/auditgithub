@@ -64,6 +64,7 @@ interface AttackSurfaceSummary {
   total_hardcoded_assets: number
   stale_contributors: number
   high_risk_repos: number
+  active_investigations: number
 }
 
 interface SecretsByType {
@@ -134,6 +135,20 @@ interface HighRiskRepo {
   contributors_count: number
 }
 
+interface IRFinding {
+  id: string
+  title: string
+  severity: string
+  investigation_status: string
+  investigation_started_at: string | null
+  scanner_name: string | null
+  repo_name: string
+  repository_id: string | null
+  file_path: string | null
+  journal_count: number
+  last_journal_at: string | null
+}
+
 // Color scheme for secrets
 const SECRET_COLORS: Record<string, string> = {
   AWS: "#FF9900",
@@ -165,6 +180,7 @@ export default function AttackSurfacePage() {
   const [abandonedRepos, setAbandonedRepos] = useState<AbandonedRepo[]>([])
   const [staleContributors, setStaleContributors] = useState<StaleContributor[]>([])
   const [highRiskRepos, setHighRiskRepos] = useState<HighRiskRepo[]>([])
+  const [irFindings, setIRFindings] = useState<IRFinding[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState("overview")
   
@@ -180,12 +196,13 @@ export default function AttackSurfacePage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [summaryRes, secretsRes, abandonedRes, staleRes, highRiskRes] = await Promise.all([
+        const [summaryRes, secretsRes, abandonedRes, staleRes, highRiskRes, irRes] = await Promise.all([
           fetch(`${API_BASE}/attack-surface/summary`),
           fetch(`${API_BASE}/attack-surface/secrets?limit=20`),
           fetch(`${API_BASE}/attack-surface/abandoned?limit=200`),
           fetch(`${API_BASE}/attack-surface/stale-contributors?limit=200`),
           fetch(`${API_BASE}/attack-surface/high-risk-repos?limit=200`),
+          fetch(`${API_BASE}/attack-surface/incident-response`),
         ])
 
         if (summaryRes.ok) setSummary(await summaryRes.json())
@@ -193,6 +210,7 @@ export default function AttackSurfacePage() {
         if (abandonedRes.ok) setAbandonedRepos(await abandonedRes.json())
         if (staleRes.ok) setStaleContributors(await staleRes.json())
         if (highRiskRes.ok) setHighRiskRepos(await highRiskRes.json())
+        if (irRes.ok) setIRFindings(await irRes.json())
       } catch (error) {
         console.error("Failed to fetch attack surface data:", error)
       } finally {
@@ -696,7 +714,7 @@ export default function AttackSurfacePage() {
       </div>
 
       {/* Executive Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         {/* Total Secrets Card */}
         <Card className="border-l-4 border-l-red-500 bg-gradient-to-r from-red-500/5 to-transparent">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -770,14 +788,41 @@ export default function AttackSurfacePage() {
             />
           </CardContent>
         </Card>
+
+        {/* Incident Response Card */}
+        <Card 
+          className="border-l-4 border-l-blue-500 bg-gradient-to-r from-blue-500/5 to-transparent cursor-pointer hover:bg-blue-50/50 dark:hover:bg-blue-950/20 transition-colors"
+          onClick={() => setActiveTab("ir")}
+        >
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Incident Response
+            </CardTitle>
+            <Shield className="h-5 w-5 text-blue-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-blue-600">{summary?.active_investigations || 0}</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Active investigations
+            </p>
+            <Progress
+              value={Math.min((summary?.active_investigations || 0) * 10, 100)}
+              className="mt-2 h-1 bg-blue-100"
+            />
+          </CardContent>
+        </Card>
       </div>
 
       {/* Tabbed Content */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full max-w-2xl grid-cols-5">
+        <TabsList className="grid w-full max-w-3xl grid-cols-6">
           <TabsTrigger value="overview" className="flex items-center gap-2">
             <Eye className="h-4 w-4" />
             Overview
+          </TabsTrigger>
+          <TabsTrigger value="ir" className="flex items-center gap-2">
+            <Shield className="h-4 w-4" />
+            IR
           </TabsTrigger>
           <TabsTrigger value="high-risk" className="flex items-center gap-2">
             <ShieldAlert className="h-4 w-4" />
@@ -1093,6 +1138,117 @@ export default function AttackSurfacePage() {
                 searchKey="name"
                 tableId="stale-contributors"
               />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Incident Response Tab */}
+        <TabsContent value="ir" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="h-5 w-5 text-blue-500" />
+                    Active Investigations
+                  </CardTitle>
+                  <CardDescription>
+                    Findings currently under triage or incident response
+                  </CardDescription>
+                </div>
+                <Badge variant="outline" className="text-lg">
+                  {summary?.active_investigations || irFindings.length} active
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {irFindings.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <Shield className="h-12 w-12 mb-4 opacity-30" />
+                  <p className="text-lg font-medium">No Active Investigations</p>
+                  <p className="text-sm">Start triaging findings to see them here</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Finding</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Severity</TableHead>
+                      <TableHead>Repository</TableHead>
+                      <TableHead>Journal</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {irFindings.map((finding) => (
+                      <TableRow key={finding.id}>
+                        <TableCell className="max-w-[300px]">
+                          <Link
+                            href={`/findings/${finding.id}`}
+                            className="font-medium text-blue-600 hover:underline line-clamp-2"
+                          >
+                            {finding.title}
+                          </Link>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {finding.file_path}
+                          </p>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            className={
+                              finding.investigation_status === "incident_response"
+                                ? "bg-red-500 hover:bg-red-600"
+                                : finding.investigation_status === "triage"
+                                ? "bg-yellow-500 hover:bg-yellow-600"
+                                : "bg-green-500 hover:bg-green-600"
+                            }
+                          >
+                            {finding.investigation_status === "incident_response"
+                              ? "IR"
+                              : finding.investigation_status === "triage"
+                              ? "Triage"
+                              : "Resolved"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              finding.severity === "critical"
+                                ? "destructive"
+                                : finding.severity === "high"
+                                ? "secondary"
+                                : "outline"
+                            }
+                          >
+                            {finding.severity}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm">{finding.repo_name}</span>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                            <span>{finding.journal_count} entries</span>
+                            {finding.last_journal_at && (
+                              <span className="text-xs">
+                                • {new Date(finding.last_journal_at).toLocaleDateString()}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm" asChild>
+                            <Link href={`/findings/${finding.id}`}>
+                              View <ChevronRight className="h-4 w-4 ml-1" />
+                            </Link>
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

@@ -52,6 +52,8 @@ class FindingResponse(BaseModel):
     repo_name: str
     repository_id: Optional[str] = None
     is_archived: Optional[bool] = None  # Is the repo archived
+    investigation_status: Optional[str] = None  # triage, incident_response, resolved
+    investigation_started_at: Optional[datetime] = None
     remediations: List[RemediationModel] = []
 
     model_config = {"from_attributes": True}
@@ -145,6 +147,8 @@ def get_findings(
         repo_name=f.repository.name if f.repository else "Unknown",
         repository_id=str(f.repository.id) if f.repository else None,
         is_archived=f.repository.is_archived if f.repository else None,
+        investigation_status=f.investigation_status,
+        investigation_started_at=f.investigation_started_at,
         remediations=[RemediationModel(
             id=str(r.id),
             remediation_text=r.remediation_text,
@@ -196,6 +200,8 @@ def get_finding(finding_id: str, db: Session = Depends(get_db)):
         repo_name=finding.repository.name if finding.repository else "Unknown",
         repository_id=str(finding.repository.id) if finding.repository else None,
         is_archived=finding.repository.is_archived if finding.repository else None,
+        investigation_status=finding.investigation_status,
+        investigation_started_at=finding.investigation_started_at,
         remediations=[RemediationModel(
             id=str(r.id),
             remediation_text=r.remediation_text,
@@ -736,3 +742,287 @@ def delete_findings(
         db.rollback()
         logger.error(f"Error deleting findings: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete findings: {str(e)}")
+
+
+# =============================================================================
+# Investigation Status & Journal API
+# =============================================================================
+
+class InvestigationStatusUpdate(BaseModel):
+    """Request to update investigation status."""
+    status: str  # 'triage', 'incident_response', 'resolved', or null to clear
+
+class JournalEntryRequest(BaseModel):
+    """Request to create a journal entry."""
+    entry_text: str
+    entry_type: Optional[str] = 'note'  # 'note', 'status_change', 'ai_response', 'communication'
+    author_name: Optional[str] = 'Analyst'
+    is_ai_generated: Optional[bool] = False
+    ai_prompt: Optional[str] = None
+
+class JournalEntryResponse(BaseModel):
+    """A single journal entry."""
+    id: str
+    entry_text: str
+    entry_type: str
+    author_name: str
+    is_ai_generated: bool
+    ai_prompt: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+class InvestigationStatusResponse(BaseModel):
+    """Response with investigation status and journal."""
+    finding_id: str
+    investigation_status: Optional[str]
+    investigation_started_at: Optional[datetime]
+    investigation_resolved_at: Optional[datetime]
+    journal_entries: List[JournalEntryResponse]
+
+class AskJournalAIRequest(BaseModel):
+    """Request to ask AI a question about the finding in journal context."""
+    question: str
+    author_name: Optional[str] = 'Analyst'
+
+
+@router.get("/{finding_id}/investigation", response_model=InvestigationStatusResponse)
+def get_investigation_status(finding_id: str, db: Session = Depends(get_db)):
+    """Get investigation status and journal entries for a finding."""
+    try:
+        uuid_obj = uuid.UUID(finding_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    finding = db.query(models.Finding).filter(models.Finding.finding_uuid == uuid_obj).first()
+    if not finding:
+        finding = db.query(models.Finding).filter(models.Finding.id == uuid_obj).first()
+        
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    # Get journal entries
+    journal_entries = db.query(models.JournalEntry).filter(
+        models.JournalEntry.finding_id == finding.id
+    ).order_by(models.JournalEntry.created_at.desc()).all()
+
+    return InvestigationStatusResponse(
+        finding_id=str(finding.finding_uuid),
+        investigation_status=finding.investigation_status,
+        investigation_started_at=finding.investigation_started_at,
+        investigation_resolved_at=finding.investigation_resolved_at,
+        journal_entries=[JournalEntryResponse(
+            id=str(entry.id),
+            entry_text=entry.entry_text,
+            entry_type=entry.entry_type or 'note',
+            author_name=entry.author_name or 'Analyst',
+            is_ai_generated=entry.is_ai_generated or False,
+            ai_prompt=entry.ai_prompt,
+            created_at=entry.created_at
+        ) for entry in journal_entries]
+    )
+
+
+@router.patch("/{finding_id}/investigation/status")
+def update_investigation_status(finding_id: str, update: InvestigationStatusUpdate, db: Session = Depends(get_db)):
+    """Update investigation status for a finding."""
+    try:
+        uuid_obj = uuid.UUID(finding_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    finding = db.query(models.Finding).filter(models.Finding.finding_uuid == uuid_obj).first()
+    if not finding:
+        finding = db.query(models.Finding).filter(models.Finding.id == uuid_obj).first()
+        
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    # Validate status
+    valid_statuses = ['triage', 'incident_response', 'resolved', None, '']
+    if update.status and update.status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: triage, incident_response, resolved")
+
+    old_status = finding.investigation_status
+    new_status = update.status if update.status else None
+
+    # Update timestamps based on status changes
+    if new_status and not old_status:
+        # Starting investigation
+        finding.investigation_started_at = datetime.utcnow()
+    
+    if new_status == 'resolved' and old_status != 'resolved':
+        finding.investigation_resolved_at = datetime.utcnow()
+    elif new_status != 'resolved':
+        finding.investigation_resolved_at = None
+
+    finding.investigation_status = new_status
+    
+    # Create a status change journal entry
+    if old_status != new_status:
+        status_entry = models.JournalEntry(
+            finding_id=finding.id,
+            entry_text=f"Status changed from **{old_status or 'None'}** to **{new_status or 'None'}**",
+            entry_type='status_change',
+            author_name='System',
+            is_ai_generated=False
+        )
+        db.add(status_entry)
+
+    db.commit()
+    db.refresh(finding)
+
+    return {
+        "finding_id": str(finding.finding_uuid),
+        "investigation_status": finding.investigation_status,
+        "investigation_started_at": finding.investigation_started_at,
+        "investigation_resolved_at": finding.investigation_resolved_at,
+        "message": f"Status updated to {new_status or 'None'}"
+    }
+
+
+@router.post("/{finding_id}/journal", response_model=JournalEntryResponse)
+def create_journal_entry(finding_id: str, entry: JournalEntryRequest, db: Session = Depends(get_db)):
+    """Create a new journal entry for a finding."""
+    try:
+        uuid_obj = uuid.UUID(finding_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    finding = db.query(models.Finding).filter(models.Finding.finding_uuid == uuid_obj).first()
+    if not finding:
+        finding = db.query(models.Finding).filter(models.Finding.id == uuid_obj).first()
+        
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    journal_entry = models.JournalEntry(
+        finding_id=finding.id,
+        entry_text=entry.entry_text,
+        entry_type=entry.entry_type or 'note',
+        author_name=entry.author_name or 'Analyst',
+        is_ai_generated=entry.is_ai_generated or False,
+        ai_prompt=entry.ai_prompt
+    )
+    db.add(journal_entry)
+    db.commit()
+    db.refresh(journal_entry)
+
+    return JournalEntryResponse(
+        id=str(journal_entry.id),
+        entry_text=journal_entry.entry_text,
+        entry_type=journal_entry.entry_type or 'note',
+        author_name=journal_entry.author_name or 'Analyst',
+        is_ai_generated=journal_entry.is_ai_generated or False,
+        ai_prompt=journal_entry.ai_prompt,
+        created_at=journal_entry.created_at
+    )
+
+
+@router.post("/{finding_id}/journal/ask-ai", response_model=JournalEntryResponse)
+async def ask_journal_ai(finding_id: str, request: AskJournalAIRequest, db: Session = Depends(get_db)):
+    """Ask AI a question in the context of the journal and get an AI response."""
+    from ..config import settings
+    
+    try:
+        uuid_obj = uuid.UUID(finding_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    finding = db.query(models.Finding).filter(models.Finding.finding_uuid == uuid_obj).first()
+    if not finding:
+        finding = db.query(models.Finding).filter(models.Finding.id == uuid_obj).first()
+        
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    # Get recent journal entries for context
+    recent_entries = db.query(models.JournalEntry).filter(
+        models.JournalEntry.finding_id == finding.id
+    ).order_by(models.JournalEntry.created_at.desc()).limit(10).all()
+
+    # Build context for AI
+    journal_context = "\n".join([
+        f"[{e.created_at.strftime('%Y-%m-%d %H:%M')}] {e.author_name}: {e.entry_text}"
+        for e in reversed(recent_entries)
+    ])
+
+    # Prepare the AI prompt
+    system_prompt = f"""You are a security analyst assistant helping investigate a security finding.
+
+**Finding Information:**
+- Title: {finding.title}
+- Severity: {finding.severity}
+- Scanner: {finding.scanner_name}
+- File: {finding.file_path}
+- Description: {finding.description or 'No description'}
+- Code Snippet: {finding.code_snippet or 'No code snippet'}
+
+**Recent Journal Entries:**
+{journal_context if journal_context else 'No previous journal entries'}
+
+Please provide helpful, actionable advice for the analyst's question. Be concise but thorough."""
+
+    # Call AI provider
+    ai_response = None
+    try:
+        if settings.OPENAI_API_KEY:
+            import openai
+            client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+            response = client.chat.completions.create(
+                model=settings.AI_MODEL or "gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": request.question}
+                ],
+                max_tokens=1000
+            )
+            ai_response = response.choices[0].message.content
+        elif settings.ANTHROPIC_API_KEY:
+            import anthropic
+            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            response = client.messages.create(
+                model=settings.AI_MODEL or "claude-3-haiku-20240307",
+                max_tokens=1000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": request.question}]
+            )
+            ai_response = response.content[0].text
+        else:
+            ai_response = "AI assistant is not configured. Please set up OpenAI or Anthropic API keys."
+    except Exception as e:
+        logger.error(f"AI request failed: {e}")
+        ai_response = f"Failed to get AI response: {str(e)}"
+
+    # Save the user's question as a journal entry
+    user_entry = models.JournalEntry(
+        finding_id=finding.id,
+        entry_text=request.question,
+        entry_type='note',
+        author_name=request.author_name or 'Analyst',
+        is_ai_generated=False
+    )
+    db.add(user_entry)
+    
+    # Save the AI response as a journal entry
+    ai_entry = models.JournalEntry(
+        finding_id=finding.id,
+        entry_text=ai_response,
+        entry_type='ai_response',
+        author_name='AI Assistant',
+        is_ai_generated=True,
+        ai_prompt=request.question
+    )
+    db.add(ai_entry)
+    db.commit()
+    db.refresh(ai_entry)
+
+    return JournalEntryResponse(
+        id=str(ai_entry.id),
+        entry_text=ai_entry.entry_text,
+        entry_type=ai_entry.entry_type or 'ai_response',
+        author_name=ai_entry.author_name or 'AI Assistant',
+        is_ai_generated=True,
+        ai_prompt=ai_entry.ai_prompt,
+        created_at=ai_entry.created_at
+    )

@@ -188,27 +188,44 @@ def extract_identity_signals(name: str, email: str, github_username: Optional[st
     return signals
 
 
+def normalize_identifier(s: str) -> str:
+    """Normalize an identifier by removing dots, hyphens, and underscores."""
+    if not s:
+        return ""
+    return s.lower().replace('.', '').replace('-', '').replace('_', '')
+
+
 def calculate_match_confidence(sig1: Dict, sig2: Dict) -> tuple[float, str]:
     """Calculate match confidence between two identity signal sets."""
-    
+
     # Same email = definite match
     if sig1['email'] and sig2['email']:
         if sig1['email'].lower().strip() == sig2['email'].lower().strip():
             return 1.0, "exact_email_match"
-    
+
     # Same SleepNumber email local part
     if sig1['email_local'] and sig2['email_local']:
         if sig1['email_domain'] == 'sleepnumber.com' and sig2['email_domain'] == 'sleepnumber.com':
             if sig1['email_local'] == sig2['email_local']:
                 return 0.99, "same_sleepnumber_email"
-    
-    # GitHub username matches email local
+
+    # GitHub username matches email local (normalize both to handle konrad-dunikowski vs konrad.dunikowski)
     if sig1['github_username'] and sig2['email_local']:
-        if sig1['github_username'].lower() == sig2['email_local'].replace('.', ''):
+        if normalize_identifier(sig1['github_username']) == normalize_identifier(sig2['email_local']):
             return 0.95, "github_matches_email"
     if sig2['github_username'] and sig1['email_local']:
-        if sig2['github_username'].lower() == sig1['email_local'].replace('.', ''):
+        if normalize_identifier(sig2['github_username']) == normalize_identifier(sig1['email_local']):
             return 0.95, "github_matches_email"
+
+    # GitHub noreply username matches corporate email local
+    if sig1['is_noreply'] and sig1['github_username'] and sig2['email_local']:
+        if sig2['email_domain'] == 'sleepnumber.com':
+            if normalize_identifier(sig1['github_username']) == normalize_identifier(sig2['email_local']):
+                return 0.96, "noreply_github_matches_corp_email"
+    if sig2['is_noreply'] and sig2['github_username'] and sig1['email_local']:
+        if sig1['email_domain'] == 'sleepnumber.com':
+            if normalize_identifier(sig2['github_username']) == normalize_identifier(sig1['email_local']):
+                return 0.96, "noreply_github_matches_corp_email"
     
     # Name matches email pattern
     if sig1['name_parts'] and sig2['email_local']:

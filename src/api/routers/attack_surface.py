@@ -193,6 +193,28 @@ class AttackSurfaceSummary(BaseModel):
     total_hardcoded_assets: int
     stale_contributors: int
     high_risk_repos: int
+    active_investigations: int = 0  # Findings under triage or incident response
+
+
+# =============================================================================
+# INCIDENT RESPONSE MODELS
+# =============================================================================
+
+class IRFinding(BaseModel):
+    """A finding currently under investigation."""
+    id: str
+    title: str
+    severity: str
+    investigation_status: str
+    investigation_started_at: Optional[datetime]
+    scanner_name: Optional[str]
+    repo_name: str
+    repository_id: Optional[str]
+    file_path: Optional[str]
+    journal_count: int = 0
+    last_journal_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
 
 
 # =============================================================================
@@ -236,6 +258,12 @@ def extract_identity_signals(name: str, email: str, github_username: Optional[st
     
     return signals
 
+def normalize_identifier(s: str) -> str:
+    """Normalize an identifier by removing dots, hyphens, and underscores."""
+    if not s:
+        return ""
+    return s.lower().replace('.', '').replace('-', '').replace('_', '')
+
 def simple_identity_match(sig1: Dict, sig2: Dict) -> tuple[bool, float, str]:
     """
     Simple rule-based identity matching.
@@ -245,20 +273,30 @@ def simple_identity_match(sig1: Dict, sig2: Dict) -> tuple[bool, float, str]:
     if sig1['email'] and sig2['email']:
         if sig1['email'].lower().strip() == sig2['email'].lower().strip():
             return True, 1.0, "exact_email_match"
-    
+
     # Same email local part at sleepnumber.com = very likely match
     if sig1['email_local'] and sig2['email_local']:
         if sig1['email_domain'] == 'sleepnumber.com' and sig2['email_domain'] == 'sleepnumber.com':
             if sig1['email_local'] == sig2['email_local']:
                 return True, 0.99, "same_sleepnumber_email"
-    
-    # GitHub username matches email local part
+
+    # GitHub username matches email local part (normalize both to handle konrad-dunikowski vs konrad.dunikowski)
     if sig1['github_username'] and sig2['email_local']:
-        if sig1['github_username'].lower() == sig2['email_local'].replace('.', ''):
+        if normalize_identifier(sig1['github_username']) == normalize_identifier(sig2['email_local']):
             return True, 0.95, "github_matches_email"
     if sig2['github_username'] and sig1['email_local']:
-        if sig2['github_username'].lower() == sig1['email_local'].replace('.', ''):
+        if normalize_identifier(sig2['github_username']) == normalize_identifier(sig1['email_local']):
             return True, 0.95, "github_matches_email"
+
+    # GitHub noreply username matches corporate email local (e.g., konrad-dunikowski matches konrad.dunikowski@sleepnumber.com)
+    if sig1['is_noreply'] and sig1['github_username'] and sig2['email_local']:
+        if sig2['email_domain'] == 'sleepnumber.com':
+            if normalize_identifier(sig1['github_username']) == normalize_identifier(sig2['email_local']):
+                return True, 0.96, "noreply_github_matches_corp_email"
+    if sig2['is_noreply'] and sig2['github_username'] and sig1['email_local']:
+        if sig1['email_domain'] == 'sleepnumber.com':
+            if normalize_identifier(sig2['github_username']) == normalize_identifier(sig1['email_local']):
+                return True, 0.96, "noreply_github_matches_corp_email"
     
     # Name matches email pattern (first.last@domain or firstlast@domain)
     if sig1['name_parts'] and sig2['email_local']:
@@ -1415,6 +1453,11 @@ def get_attack_surface_summary(db: Session = Depends(get_db)):
         )
     ).distinct().count()
     
+    # Active investigations (triage or incident_response status)
+    active_investigations = db.query(models.Finding).filter(
+        models.Finding.investigation_status.in_(['triage', 'incident_response'])
+    ).count()
+    
     return AttackSurfaceSummary(
         total_repos=total_repos,
         public_repos=public_repos,
@@ -1424,5 +1467,67 @@ def get_attack_surface_summary(db: Session = Depends(get_db)):
         total_secrets=total_secrets,
         total_hardcoded_assets=total_hardcoded,
         stale_contributors=stale_contributors,
-        high_risk_repos=high_risk_repos
+        high_risk_repos=high_risk_repos,
+        active_investigations=active_investigations
     )
+
+
+# =============================================================================
+# INCIDENT RESPONSE FINDINGS
+# =============================================================================
+
+@router.get("/incident-response", response_model=List[IRFinding])
+def get_ir_findings(
+    limit: int = Query(200, description="Maximum number of findings to return"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all findings currently under investigation (triage or incident_response status).
+    """
+    # Query findings with active investigation status
+    findings = db.query(models.Finding).join(
+        models.Repository, models.Finding.repository_id == models.Repository.id
+    ).filter(
+        models.Finding.investigation_status.in_(['triage', 'incident_response'])
+    ).order_by(
+        # Order by status (incident_response first), then by start date
+        case(
+            (models.Finding.investigation_status == 'incident_response', 1),
+            (models.Finding.investigation_status == 'triage', 2),
+            else_=3
+        ),
+        models.Finding.investigation_started_at.desc()
+    ).limit(limit).all()
+    
+    # Get journal counts for each finding
+    finding_ids = [f.id for f in findings]
+    journal_counts = {}
+    last_journal_dates = {}
+    
+    if finding_ids:
+        # Get count and last entry date per finding
+        journal_stats = db.query(
+            models.JournalEntry.finding_id,
+            func.count(models.JournalEntry.id).label('count'),
+            func.max(models.JournalEntry.created_at).label('last_at')
+        ).filter(
+            models.JournalEntry.finding_id.in_(finding_ids)
+        ).group_by(models.JournalEntry.finding_id).all()
+        
+        for stat in journal_stats:
+            journal_counts[stat.finding_id] = stat.count
+            last_journal_dates[stat.finding_id] = stat.last_at
+    
+    return [IRFinding(
+        id=str(f.finding_uuid),
+        title=f.title,
+        severity=f.severity,
+        investigation_status=f.investigation_status,
+        investigation_started_at=f.investigation_started_at,
+        scanner_name=f.scanner_name,
+        repo_name=f.repository.name if f.repository else "Unknown",
+        repository_id=str(f.repository.id) if f.repository else None,
+        file_path=f.file_path,
+        journal_count=journal_counts.get(f.id, 0),
+        last_journal_at=last_journal_dates.get(f.id)
+    ) for f in findings]

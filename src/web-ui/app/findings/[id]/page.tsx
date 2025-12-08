@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge"
 import { AiRemediationCard } from "@/components/ai-remediation-card"
 import { ExceptionDialog } from "@/components/ExceptionDialog"
 import { AskAIDialog } from "@/components/AskAIDialog"
-import { Loader2, ArrowLeft, Sparkles, GitCommit, User, Calendar, Clock, FileCode, Archive } from "lucide-react"
+import { JournalModal } from "@/components/JournalModal"
+import { Loader2, ArrowLeft, Sparkles, GitCommit, User, Calendar, Clock, FileCode, Archive, BookOpen, AlertTriangle, Shield, CheckCircle2 } from "lucide-react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import ReactMarkdown from "react-markdown"
@@ -22,23 +23,52 @@ export default function FindingDetailsPage() {
     const [finding, setFinding] = useState<any>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [journalOpen, setJournalOpen] = useState(false)
+
+    const fetchFinding = async () => {
+        try {
+            const res = await fetch(`${API_BASE}/findings/${id}`)
+            if (!res.ok) throw new Error("Finding not found")
+            const data = await res.json()
+            setFinding(data)
+        } catch (err) {
+            setError("Failed to load finding details")
+        } finally {
+            setLoading(false)
+        }
+    }
 
     useEffect(() => {
-        const fetchFinding = async () => {
-            try {
-                const res = await fetch(`${API_BASE}/findings/${id}`)
-                if (!res.ok) throw new Error("Finding not found")
-                const data = await res.json()
-                setFinding(data)
-            } catch (err) {
-                setError("Failed to load finding details")
-            } finally {
-                setLoading(false)
-            }
-        }
-
         if (id) fetchFinding()
     }, [id])
+
+    const getInvestigationStatusBadge = (status: string | null) => {
+        switch (status) {
+            case "triage":
+                return (
+                    <Badge className="bg-yellow-500 hover:bg-yellow-600 text-white flex items-center gap-1">
+                        <AlertTriangle className="h-3 w-3" />
+                        Triage
+                    </Badge>
+                )
+            case "incident_response":
+                return (
+                    <Badge className="bg-red-500 hover:bg-red-600 text-white flex items-center gap-1">
+                        <Shield className="h-3 w-3" />
+                        IR
+                    </Badge>
+                )
+            case "resolved":
+                return (
+                    <Badge className="bg-green-500 hover:bg-green-600 text-white flex items-center gap-1">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Resolved
+                    </Badge>
+                )
+            default:
+                return null
+        }
+    }
 
     if (loading) {
         return (
@@ -75,9 +105,26 @@ export default function FindingDetailsPage() {
                         )}
                         <span>•</span>
                         <span>{finding.id.substring(0, 8)}</span>
+                        {/* Investigation Status Badge */}
+                        {finding.investigation_status && (
+                            <>
+                                <span>•</span>
+                                {getInvestigationStatusBadge(finding.investigation_status)}
+                            </>
+                        )}
                     </div>
                 </div>
                 <div className="ml-auto flex items-center gap-2">
+                    {/* Journal Button */}
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setJournalOpen(true)}
+                        className="flex items-center gap-2"
+                    >
+                        <BookOpen className="h-4 w-4" />
+                        Journal
+                    </Button>
                     <ExceptionDialog finding={finding} onDeleted={() => router.push("/findings")} />
                     <Badge
                         className={
@@ -263,6 +310,16 @@ export default function FindingDetailsPage() {
                     />
                 </div>
             </div>
+
+            {/* Journal Modal */}
+            <JournalModal
+                findingId={finding.id}
+                isOpen={journalOpen}
+                onClose={() => setJournalOpen(false)}
+                onStatusChange={(newStatus) => {
+                    setFinding({ ...finding, investigation_status: newStatus })
+                }}
+            />
         </div>
     )
 }

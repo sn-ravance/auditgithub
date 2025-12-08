@@ -104,6 +104,75 @@ def validate_jwt_token(token: str) -> Tuple[bool, str]:
         return False, f"JWT decode error: {str(e)}"
 
 
+def validate_box_secret(secret: str) -> Tuple[Optional[bool], str]:
+    """
+    Validate a Box API secret format.
+    Box uses OAuth 2.0, so we can't validate without both client ID and secret.
+    We can only do format validation.
+    
+    Box Client ID: 32-character alphanumeric
+    Box Client Secret: 32-character alphanumeric
+    Box Developer Token: longer, typically starts with specific pattern
+    """
+    import re
+    
+    # Remove any whitespace
+    secret = secret.strip()
+    
+    # Box secrets are typically 32 characters, alphanumeric
+    if len(secret) == 32 and re.match(r'^[a-zA-Z0-9]+$', secret):
+        # Could be a valid Box client ID or client secret
+        # We can't validate without the paired credential
+        return None, "Valid Box secret format (32-char alphanumeric). Cannot validate without paired client ID/secret."
+    
+    # Box Developer tokens are longer
+    if len(secret) > 32 and re.match(r'^[a-zA-Z0-9]+$', secret):
+        return None, "Possible Box developer token. Cannot validate without API call permissions."
+    
+    return False, f"Invalid Box secret format (length: {len(secret)})"
+
+
+def validate_slack_webhook(url: str) -> Tuple[Optional[bool], str]:
+    """
+    Validate a Slack webhook URL by checking its format and optionally testing it.
+    """
+    import re
+    
+    # Slack webhook URL pattern
+    webhook_pattern = r'^https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]+$'
+    
+    if not re.match(webhook_pattern, url):
+        return False, "Invalid Slack webhook URL format"
+    
+    # We could test the webhook, but that would send a message
+    # So we just validate the format
+    return None, "Valid Slack webhook URL format. Not tested to avoid sending messages."
+
+
+def validate_azure_secret(secret: str) -> Tuple[Optional[bool], str]:
+    """
+    Validate Azure secrets format.
+    Azure has various secret types: storage keys, client secrets, SAS tokens, etc.
+    """
+    import re
+    
+    secret = secret.strip()
+    
+    # Azure Storage Account Key (base64 encoded, ~88 chars)
+    if len(secret) >= 80 and secret.endswith('=='):
+        return None, "Possible Azure Storage Account Key. Cannot validate without account name."
+    
+    # Azure Client Secret (typically 34-40 chars, alphanumeric with special chars)
+    if 30 <= len(secret) <= 50 and re.match(r'^[a-zA-Z0-9~._-]+$', secret):
+        return None, "Possible Azure Client Secret format. Cannot validate without tenant/client ID."
+    
+    # Azure SAS Token (contains sig= parameter)
+    if 'sig=' in secret or 'sv=' in secret:
+        return None, "Possible Azure SAS Token. Cannot validate without full URL context."
+    
+    return None, f"Azure secret format unclear (length: {len(secret)})"
+
+
 def validate_secret(detector_name: str, raw_secret: str) -> Tuple[Optional[bool], str]:
     """
     Validate a secret based on its detector type.
@@ -118,6 +187,12 @@ def validate_secret(detector_name: str, raw_secret: str) -> Tuple[Optional[bool]
         return validate_jwt_token(raw_secret)
     elif 'aws' in detector_lower:
         return validate_aws_key(raw_secret)
+    elif 'box' in detector_lower:
+        return validate_box_secret(raw_secret)
+    elif 'slack' in detector_lower and 'webhook' in detector_lower:
+        return validate_slack_webhook(raw_secret)
+    elif 'azure' in detector_lower:
+        return validate_azure_secret(raw_secret)
     else:
         # For other secret types, we can't validate automatically
         return None, f"No automatic validation available for {detector_name}"
