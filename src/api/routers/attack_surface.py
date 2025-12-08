@@ -531,8 +531,9 @@ def get_secrets_report(
     repo_counts = {}
     for s in secrets:
         repo = s.repository.name if s.repository else 'Unknown'
+        repo_id = str(s.repository.id) if s.repository else None
         if repo not in repo_counts:
-            repo_counts[repo] = {'name': repo, 'count': 0, 'critical': 0, 'high': 0}
+            repo_counts[repo] = {'name': repo, 'id': repo_id, 'count': 0, 'critical': 0, 'high': 0}
         repo_counts[repo]['count'] += 1
         if s.severity == 'critical':
             repo_counts[repo]['critical'] += 1
@@ -600,7 +601,7 @@ def get_secrets_report(
         total_hardcoded_assets=hardcoded_assets,
         secrets_by_type=secrets_by_type,
         secrets_by_severity=secrets_by_severity,
-        secrets_by_repo=[{'repo': r['name'], 'count': r['count']} for r in top_repos],
+        secrets_by_repo=[{'repo': r['name'], 'id': r['id'], 'count': r['count']} for r in top_repos],
         top_affected_repos=top_repos,
         recent_secrets=recent_secrets
     )
@@ -1364,22 +1365,52 @@ def get_attack_surface_summary(db: Session = Depends(get_db)):
         if c['last_commit_at'] is None or c['last_commit_at'] < ninety_days_ago
     )
     
-    # High risk repos (public with secrets OR abandoned with critical findings)
-    high_risk_repos = db.query(models.Repository).join(
-        models.Finding, models.Repository.id == models.Finding.repository_id
+    # High risk repos - use same logic as /high-risk-repos endpoint
+    # Get repos with secrets (trufflehog)
+    repos_with_secrets_sub = db.query(
+        models.Finding.repository_id,
+        func.count(models.Finding.id).label('secrets_count')
     ).filter(
-        models.Finding.status == 'open',
+        models.Finding.scanner_name == 'trufflehog'
+    ).group_by(models.Finding.repository_id).subquery()
+    
+    # Get repos with critical findings
+    repos_with_critical_sub = db.query(
+        models.Finding.repository_id,
+        func.count(models.Finding.id).label('critical_count')
+    ).filter(
+        models.Finding.status.in_(['open', 'confirmed']),
+        models.Finding.severity == 'critical'
+    ).group_by(models.Finding.repository_id).subquery()
+    
+    # Count high-risk repos matching any of the criteria
+    high_risk_repos = db.query(models.Repository).outerjoin(
+        repos_with_secrets_sub,
+        repos_with_secrets_sub.c.repository_id == models.Repository.id
+    ).outerjoin(
+        repos_with_critical_sub,
+        repos_with_critical_sub.c.repository_id == models.Repository.id
+    ).filter(
         or_(
+            # Public with secrets
             and_(
                 models.Repository.visibility == 'public',
-                models.Finding.scanner_name == 'trufflehog'
+                repos_with_secrets_sub.c.secrets_count > 0
             ),
+            # Abandoned with critical findings
             and_(
-                or_(
-                    models.Repository.pushed_at < one_year_ago,
-                    models.Repository.is_archived == True
-                ),
-                models.Finding.severity == 'critical'
+                models.Repository.pushed_at < one_year_ago,
+                repos_with_critical_sub.c.critical_count > 0
+            ),
+            # Archived with critical findings
+            and_(
+                models.Repository.is_archived == True,
+                repos_with_critical_sub.c.critical_count > 0
+            ),
+            # Any repo with both secrets and critical findings
+            and_(
+                repos_with_secrets_sub.c.secrets_count > 0,
+                repos_with_critical_sub.c.critical_count > 0
             )
         )
     ).distinct().count()
