@@ -339,3 +339,105 @@ Repository.architecture_versions = relationship("ArchitectureVersion", back_popu
 Repository.contributors = relationship("Contributor", back_populates="repository", cascade="all, delete-orphan")
 Repository.languages = relationship("LanguageStat", back_populates="repository", cascade="all, delete-orphan")
 Repository.dependencies = relationship("Dependency", back_populates="repository", cascade="all, delete-orphan")
+
+
+# =============================================================================
+# CONTRIBUTOR PROFILE - Unified Identity Management
+# =============================================================================
+
+class ContributorProfile(Base):
+    """
+    Unified contributor identity that aggregates all aliases (emails, usernames).
+    Designed to integrate with Entra ID for employment status verification.
+    """
+    __tablename__ = "contributor_profiles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    
+    # Canonical identity (preferred display)
+    display_name = Column(String, nullable=False)  # "Isaac Springer"
+    primary_email = Column(String, unique=True)  # Preferred email (usually @sleepnumber.com)
+    primary_github_username = Column(String)  # Primary GitHub handle
+    
+    # Entra ID / Azure AD integration
+    entra_id_object_id = Column(String, unique=True)  # Azure AD Object ID (GUID)
+    entra_id_upn = Column(String)  # User Principal Name (email-like identifier)
+    entra_id_employee_id = Column(String)  # Employee ID from HR system
+    entra_id_job_title = Column(String)
+    entra_id_department = Column(String)
+    entra_id_manager_upn = Column(String)  # Manager's UPN for escalation
+    
+    # Employment status
+    employment_status = Column(String, default='unknown')  # active, inactive, terminated, contractor, unknown
+    employment_verified_at = Column(DateTime)  # Last time we verified with Entra ID
+    employment_start_date = Column(DateTime)
+    employment_end_date = Column(DateTime)  # Termination date if known
+    
+    # Aggregated stats (computed from all linked Contributors)
+    total_repos = Column(Integer, default=0)
+    total_commits = Column(Integer, default=0)
+    last_activity_at = Column(DateTime)  # Most recent commit across all repos
+    first_activity_at = Column(DateTime)  # Earliest known commit
+    
+    # Risk assessment
+    risk_score = Column(Integer, default=0)  # 0-100 calculated risk
+    is_stale = Column(Boolean, default=False)  # No activity in 90+ days
+    has_elevated_access = Column(Boolean, default=False)  # Has access to sensitive repos
+    files_with_findings = Column(Integer, default=0)
+    critical_files_count = Column(Integer, default=0)
+    
+    # AI analysis
+    ai_identity_confidence = Column(Numeric(3, 2))  # Confidence in identity merging
+    ai_summary = Column(Text)  # AI-generated profile analysis
+    
+    # Metadata
+    is_verified = Column(Boolean, default=False)  # Manually verified by admin
+    verified_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    verified_at = Column(DateTime)
+    notes = Column(Text)  # Admin notes
+    
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    # Relationships
+    aliases = relationship("ContributorAlias", back_populates="profile", cascade="all, delete-orphan")
+    verifier = relationship("User")
+
+
+class ContributorAlias(Base):
+    """
+    An alias (email, username, name variation) linked to a ContributorProfile.
+    Allows tracking all the different identities a single person has used.
+    """
+    __tablename__ = "contributor_aliases"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    profile_id = Column(UUID(as_uuid=True), ForeignKey("contributor_profiles.id"), nullable=False)
+    
+    # Identity information
+    alias_type = Column(String, nullable=False)  # 'email', 'github_username', 'name'
+    alias_value = Column(String, nullable=False)  # The actual value
+    is_primary = Column(Boolean, default=False)  # Is this the preferred alias of its type?
+    
+    # Source tracking
+    source = Column(String)  # 'git_log', 'github_api', 'entra_id', 'manual'
+    first_seen_at = Column(DateTime)
+    last_seen_at = Column(DateTime)
+    
+    # Match metadata
+    match_confidence = Column(Numeric(3, 2))  # How confident was the matching algorithm
+    match_reason = Column(String)  # 'exact_email', 'same_full_name', 'github_matches_email', etc.
+    
+    created_at = Column(DateTime, server_default=func.now())
+    
+    # Relationships
+    profile = relationship("ContributorProfile", back_populates="aliases")
+    
+    __table_args__ = (
+        UniqueConstraint('alias_type', 'alias_value', name='uq_contributor_alias'),
+    )
+
+
+# Add link from Contributor to ContributorProfile
+Contributor.profile_id = Column(UUID(as_uuid=True), ForeignKey("contributor_profiles.id"), nullable=True)
+Contributor.profile = relationship("ContributorProfile", backref="contributors")

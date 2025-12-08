@@ -3,6 +3,7 @@
 import * as React from "react"
 import {
     ShieldCheck,
+    ShieldAlert,
     LayoutDashboard,
     FileText,
     Settings,
@@ -12,6 +13,7 @@ import {
     Search,
     ClipboardList,
     ChevronDown,
+    Target,
 } from "lucide-react"
 
 import {
@@ -77,6 +79,11 @@ const data: { navMain: NavGroup[] } = {
                     title: "Repositories",
                     url: "/repositories",
                     icon: GitBranch,
+                },
+                {
+                    title: "Attack Surface",
+                    url: "/attack-surface",
+                    icon: Target,
                 },
                 {
                     title: "Zero Day Analysis",
