@@ -172,7 +172,10 @@ export default function DashboardPage() {
             <div className="grid gap-6 lg:grid-cols-5">
                 {/* Threat Radar - Takes 2 columns */}
                 <div className="lg:col-span-2">
-                    <ThreatRadar data={threatRadarData} />
+                    <ThreatRadar
+                        data={threatRadarData}
+                        investigationCount={heroMetrics.underInvestigation}
+                    />
                 </div>
 
                 {/* AI Insights Panel - Takes 3 columns */}
